@@ -230,10 +230,17 @@ Production HA qualification is a separate, explicit gate:
 make validate-ha ENVIRONMENT="$ENVIRONMENT"
 ```
 
-This intentionally fails until owners approve numeric node-loss, failover,
-RPO, and RTO objectives and resolve the storage decisions. An availability
-rollout may be performed under an approved phased plan, but it must be reported
-as `redundancy: at-risk`; do not describe it as HA-qualified.
+For a shared production service, this intentionally fails until owners approve
+numeric node-loss, failover, RPO, and RTO objectives and resolve the storage
+decisions. An availability rollout under a phased HA plan is reported as
+`redundancy: at-risk`.
+
+The checked-in production environment is approved for personal, single-user
+operation and explicitly sets `haRequired: false`. Its healthy report uses
+`redundancy: not-required`; this is an accepted non-HA deployment, not an
+HA-qualified one. `make validate-ha` intentionally rejects that policy unless
+the environment is later changed to require HA and given numeric acceptance
+objectives.
 
 ### 3. Validate source and target cluster
 
@@ -363,11 +370,14 @@ The report separates three concerns:
   `unavailable`; optional-tool failures make it `degraded`.
 - `freshness`: stale URL-ingest state is reported independently from online
   query availability.
-- `redundancy`: remains `at-risk` until the production HA acceptance gate is
-  approved and met.
+- `redundancy`: is `not-required` for an approved personal non-HA environment,
+  `at-risk` while a required HA gate is unresolved, and `met` only after an HA
+  policy is approved.
 
 The direct command exits `0` for healthy, `1` for required availability loss,
-and `2` for degraded, stale, or at-risk. Run the guarded `make preflight`
+and `2` for degraded, stale, or at-risk. `not-required` is successful only
+when the environment explicitly approves personal non-HA operation and records
+its accepted risks. Run the guarded `make preflight`
 immediately before it because the direct health command itself is read-only and
 does not apply the Make context guard. `make health-stack` prints the same JSON,
 but GNU Make collapses a nonzero recipe exit; use `contextctl` when automation

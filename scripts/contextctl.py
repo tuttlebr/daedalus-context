@@ -57,6 +57,20 @@ def assert_acyclic(releases: dict[str, Any]) -> None:
         visit(release)
 
 
+def is_approved_personal_non_ha(acceptance: dict[str, Any]) -> bool:
+    risks = acceptance.get("acceptedRisks")
+    return (
+        acceptance.get("haRequired") is False
+        and acceptance.get("status") == "approved"
+        and acceptance.get("operatingMode") == "personal-single-user"
+        and acceptance.get("haPhaseBlocked") is False
+        and isinstance(risks, list)
+        and bool(risks)
+        and all(isinstance(risk, str) and bool(risk.strip()) for risk in risks)
+        and not acceptance.get("requiredDecisions")
+    )
+
+
 def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
     topology = load_yaml(STACK / "topology.yaml")
     collections = load_yaml(STACK / "collections.yaml")
@@ -167,11 +181,22 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
         minio_class = environment.get("storage", {}).get("minioStorageClass", "")
         if minio_class == "local-etcd":
             raise ValueError("production MinIO must not use local-etcd")
-        if acceptance["status"] != "approved":
+        ha_required = acceptance.get("haRequired", True)
+        if not ha_required:
+            if not is_approved_personal_non_ha(acceptance):
+                raise ValueError(
+                    "non-HA production requires an approved personal-single-user "
+                    "policy with accepted risks and no unresolved decisions"
+                )
+        elif acceptance["status"] != "approved":
             if not acceptance["haPhaseBlocked"]:
                 raise ValueError("unapproved production acceptance must block the HA phase")
             warnings.append("production HA remains blocked pending owner decisions")
         if require_ha:
+            if not ha_required:
+                raise ValueError(
+                    "HA validation is disabled by the approved personal-single-user policy"
+                )
             validate_approved_acceptance(acceptance)
             if pending_revisions:
                 raise ValueError(
@@ -370,18 +395,42 @@ def run_health(environment_name: str, components: list[str]) -> int:
 
     availability = "unavailable" if failed else ("degraded" if optional_failed else "healthy")
     acceptance = environment["acceptance"]
-    redundancy = "at-risk" if acceptance.get("haPhaseBlocked", True) else "met"
+    ha_required = acceptance.get("haRequired", True)
+    personal_non_ha = is_approved_personal_non_ha(acceptance)
+    redundancy = (
+        "not-required"
+        if personal_non_ha
+        else (
+            "at-risk"
+            if not ha_required or acceptance.get("haPhaseBlocked", True)
+            else "met"
+        )
+    )
     report = {
         "availability": availability,
         "freshness": freshness,
         "redundancy": redundancy,
+        "operatingMode": acceptance.get("operatingMode", "shared-production"),
         "failed": failed + optional_failed,
-        "blockedBy": acceptance.get("requiredDecisions", []),
+        "blockedBy": (
+            []
+            if personal_non_ha
+            else acceptance.get("requiredDecisions", [])
+            or (
+                ["invalid personal non-HA acceptance policy"]
+                if not ha_required
+                else []
+            )
+        ),
     }
     print(json.dumps(report, indent=2, sort_keys=True))
     if availability == "unavailable":
         return 1
-    if availability == "degraded" or freshness != "fresh" or redundancy != "met":
+    if (
+        availability == "degraded"
+        or freshness != "fresh"
+        or redundancy not in {"met", "not-required"}
+    ):
         return 2
     return 0
 

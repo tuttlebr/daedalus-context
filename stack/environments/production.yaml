@@ -9,13 +9,14 @@ namespaceMode: independent
 storage:
   etcdStorageClass: local-etcd
   minioStorageClass: nfs-client
-  documentArtifactStore: pending-owner-decision
+  documentArtifactStore: shared-internal-minio
 acceptance:
-  status: pending-owner-approval
-  haPhaseBlocked: true
-  requiredDecisions:
-    - minio failure-domain layout or external HA object store
-    - document artifact store isolation and supported NV-Ingest URI
-    - numeric node-loss load and recovery policy
-    - numeric Redis failover recovery policy
-    - numeric stateful RPO and RTO
+  status: approved
+  operatingMode: personal-single-user
+  haRequired: false
+  haPhaseBlocked: false
+  acceptedRisks:
+    - MinIO and stateful PVCs depend on one NFS appliance and can be interrupted by its failure.
+    - Redis recovery is restart-based and does not provide automatic failover.
+    - No numeric node-loss, RPO, or RTO objectives apply to this personal deployment.
+    - Document artifacts share internal MinIO credentials; the application downloads objects before submitting bytes to NV-Ingest.

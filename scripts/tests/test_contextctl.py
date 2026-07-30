@@ -49,6 +49,42 @@ class HealthAggregationTests(unittest.TestCase):
         self.assertEqual(report["availability"], "degraded")
         self.assertEqual(report["failed"][0]["component"], "k8s-mcp")
 
+    def test_healthy_personal_production_does_not_require_redundancy(self):
+        def fake_run(command, **_kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout="healthy\n")
+
+        output = io.StringIO()
+        with mock.patch.object(contextctl.subprocess, "run", side_effect=fake_run):
+            with contextlib.redirect_stdout(output):
+                status = contextctl.run_health("production", ["milvus"])
+
+        report = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(report["availability"], "healthy")
+        self.assertEqual(report["redundancy"], "not-required")
+        self.assertEqual(report["operatingMode"], "personal-single-user")
+        self.assertEqual(report["blockedBy"], [])
+
+
+class AcceptancePolicyTests(unittest.TestCase):
+    def test_non_ha_waiver_requires_the_full_approved_policy(self):
+        acceptance = {
+            "status": "approved",
+            "operatingMode": "personal-single-user",
+            "haRequired": False,
+            "haPhaseBlocked": False,
+            "acceptedRisks": [],
+        }
+
+        self.assertFalse(contextctl.is_approved_personal_non_ha(acceptance))
+
+    def test_personal_non_ha_production_rejects_ha_qualification(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "HA validation is disabled by the approved personal-single-user policy",
+        ):
+            contextctl.validate_contracts("production", require_ha=True)
+
 
 class OperationGraphTests(unittest.TestCase):
     def test_failed_prerequisite_blocks_only_its_dependents(self):
