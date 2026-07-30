@@ -26,6 +26,19 @@ for collection in ${COLLECTIONS}; do
     | sort
     | last // empty
   ' <<<"${jobs_json}")"
+  latest_job_success="$(jq -r '
+    [.items[]
+      | select(any(.status.conditions[]?;
+          .type == "Complete" and .status == "True"))
+      | (.status.completionTime // .metadata.creationTimestamp)]
+    | sort
+    | last // empty
+  ' <<<"${jobs_json}")"
+  effective_success="${last_success}"
+  if [[ -n "${latest_job_success}" ]] \
+    && { [[ -z "${effective_success}" ]] || [[ "${latest_job_success}" > "${effective_success}" ]]; }; then
+    effective_success="${latest_job_success}"
+  fi
 
   active_within_grace=false
   if (( active_count > 0 )) && [[ -n "${newest_active_start}" ]]; then
@@ -44,12 +57,14 @@ for collection in ${COLLECTIONS}; do
   fi
 
   if [[ -z "${last_schedule}" ]]; then
-    failures+=("${collection}=never-scheduled")
-  elif [[ -z "${last_success}" ]]; then
+    if [[ -z "${effective_success}" && "${active_within_grace}" != "true" ]]; then
+      failures+=("${collection}=never-scheduled")
+    fi
+  elif [[ -z "${effective_success}" ]]; then
     if [[ "${active_within_grace}" != "true" ]]; then
       failures+=("${collection}=never-succeeded")
     fi
-  elif [[ "${last_success}" < "${last_schedule}" && "${active_within_grace}" != "true" ]]; then
+  elif [[ "${effective_success}" < "${last_schedule}" && "${active_within_grace}" != "true" ]]; then
     failures+=("${collection}=latest-schedule-not-successful")
   fi
 
@@ -71,7 +86,7 @@ for collection in ${COLLECTIONS}; do
   fi
 
   printf '%s schedule=%s success=%s active=%s grace=%s\n' \
-    "${collection}" "${last_schedule:-none}" "${last_success:-none}" \
+    "${collection}" "${last_schedule:-none}" "${effective_success:-none}" \
     "${active_count}" "${active_within_grace}"
 done
 
