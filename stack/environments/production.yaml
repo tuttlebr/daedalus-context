@@ -1,0 +1,21 @@
+apiVersion: daedalus.context/v1
+kind: Environment
+name: production
+profile: all
+production: true
+ragReadinessMode: degraded
+requiredCollections: [nvidia, kubernetes, vetpartner, semianalysis, mentalhealth]
+namespaceMode: independent
+storage:
+  etcdStorageClass: local-etcd
+  minioStorageClass: nfs-client
+  documentArtifactStore: pending-owner-decision
+acceptance:
+  status: pending-owner-approval
+  haPhaseBlocked: true
+  requiredDecisions:
+    - minio failure-domain layout or external HA object store
+    - document artifact store isolation and supported NV-Ingest URI
+    - numeric node-loss load and recovery policy
+    - numeric Redis failover recovery policy
+    - numeric stateful RPO and RTO

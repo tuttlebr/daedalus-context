@@ -1,0 +1,22 @@
+#!/bin/bash
+# Pre-commit hook: format check + vet + tests
+# Install: make hooks
+
+set -e
+
+echo "pre-commit: checking formatting..."
+cd src
+UNFORMATTED=$(gofmt -l .)
+if [ -n "$UNFORMATTED" ]; then
+    echo "Files not formatted (run 'make fmt'):"
+    echo "$UNFORMATTED"
+    exit 1
+fi
+
+echo "pre-commit: running go vet..."
+CGO_ENABLED=0 go vet -buildvcs=false ./...
+
+echo "pre-commit: running tests..."
+CGO_ENABLED=0 go test -buildvcs=false ./...
+
+echo "pre-commit: all checks passed"

@@ -1,0 +1,13 @@
+{{- if .Values.nimCompatibility.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nemotron-retriever.fullname" . }}-nim-compat
+  namespace: {{ include "nemotron-retriever.namespace" . }}
+  labels:
+    {{- include "nemotron-retriever.labels" . | nindent 4 }}
+    app.kubernetes.io/component: compatibility
+data:
+  nim_compat.py: |-
+    {{- .Files.Get "files/nim_compat.py" | nindent 4 }}
+{{- end }}

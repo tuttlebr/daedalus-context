@@ -1,0 +1,26 @@
+# https://pre-commit.com/
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: ["--maxkb=1500"]
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: local
+    hooks:
+      - id: gofmt-check
+        name: gofmt check
+        entry: bash -c 'cd src && test -z "$(gofmt -l .)"'
+        language: system
+        pass_filenames: false
+        files: '^src/.*\.go$'

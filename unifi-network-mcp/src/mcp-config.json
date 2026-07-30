@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "unifi-network": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}

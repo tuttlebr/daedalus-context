@@ -1,0 +1,50 @@
+apiVersion: daedalus.context/v1
+kind: ComponentLock
+generatedAt: "2026-07-29T00:00:00Z"
+components:
+  milvus:
+    source: nim-milvus-ms
+    sourceRevision: pending-implementation-commit
+    chart: zilliztech/milvus
+    chartVersion: 5.0.14
+    applicationVersion: 2.6.11
+    image: milvusdb/milvus:v2.6.11
+  retriever:
+    source: nemotron-retriever
+    sourceRevision: pending-implementation-commit
+    chartVersion: 0.3.0
+    images:
+      vllm: vllm/vllm-openai:v0.17.0
+      adapter: python:3.12.11-alpine3.22
+  nv-ingest:
+    source: nv-ingest
+    sourceRevision: pending-implementation-commit
+    chartVersion: 26.3.0
+    image: nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
+  pdf-server:
+    source: pdf-server
+    sourceRevision: pending-implementation-commit
+    image: daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0
+  url-ingest:
+    source: url-ingest
+    sourceRevision: pending-implementation-commit
+    images:
+      crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
+      runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
+  k8s-mcp:
+    source: k8s-multicluster-mcp
+    sourceRevision: pending-implementation-commit
+    image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0
+  unifi-mcp:
+    source: unifi-network-mcp
+    sourceRevision: pending-implementation-commit
+    image: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0
+models:
+  embedding:
+    repository: nvidia/llama-nemotron-embed-vl-1b-v2
+    revision: 582e3bf72aee355e3c59ed89de53543c5b0657ee
+    configSha256: f2dfebb580204fe735f6e8b5519d1ed612c6a22df8ab1b4ac26776d910128a46
+  reranker:
+    repository: nvidia/llama-nemotron-rerank-1b-v2
+    revision: d896ceda696c5c6fe0abf65f63a77c691bbf4548
+    configSha256: 34d45f095f896f950db008c19e2bb4c935fc2866f71212c0cd26022eb1167d7b

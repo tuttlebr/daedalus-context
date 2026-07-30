@@ -1,0 +1,194 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: url-ingest-kubernetes
+  namespace: milvus
+  labels:
+    app.kubernetes.io/name: url-ingest
+    app.kubernetes.io/component: kubernetes
+spec:
+  suspend: false
+  schedule: "0 3 * * 0"
+  startingDeadlineSeconds: 3600
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 86400
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 172800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: url-ingest
+            app.kubernetes.io/component: kubernetes
+        spec:
+          serviceAccountName: url-ingest
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: crawl-kubernetes
+              image: __URL_INGEST_IMAGE__
+              command: ["url_ingest"]
+              args:
+                - "--input"
+                - "/files/k8s_url_links.txt"
+                - "--output"
+                - "/downloaded_urls/kubernetes"
+                - "--input-type"
+                - "url"
+                - "--skip-existing"
+                - "--allow-failures"
+                - "--delay-ms"
+                - "100"
+              env:
+                - name: RAYON_NUM_THREADS
+                  value: "2"
+              volumeMounts:
+                - name: url-data
+                  mountPath: /downloaded_urls
+                - name: url-lists
+                  mountPath: /files
+                  readOnly: true
+              resources:
+                requests:
+                  memory: 256Mi
+                  cpu: 500m
+                limits:
+                  memory: 512Mi
+                  cpu: "1"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: nv-ingest
+              image: __URL_INGEST_RUNNER_IMAGE__
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  lock=/manifests/global-ingest-capacity.lock
+                  mkdir "${lock}" || {
+                    echo "Global ingestion capacity is in use: ${lock}" >&2
+                    exit 75
+                  }
+                  trap 'rmdir "${lock}" 2>/dev/null || true' EXIT INT TERM
+                  /opt/nv_ingest_runtime/bin/python3 /opt/daedalus/nv-ingest-ms-tasks.py
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: INGEST_MODE
+                  value: "single"
+                - name: SINGLE_COLLECTION
+                  value: "kubernetes"
+                - name: INCLUDE_PDFS
+                  value: "true"
+                - name: URL_BASE_PATH
+                  value: "/workspace/urls"
+                - name: PDF_BASE_PATH
+                  value: "/workspace/pdf-server"
+                - name: MANIFEST_BASE_PATH
+                  value: "/manifests"
+                - name: CHUNK_SIZE
+                  value: "1024"
+                - name: CHUNK_OVERLAP
+                  value: "64"
+                - name: EMBEDDING_DENSE_DIM
+                  value: "2048"
+                - name: TOKENIZER
+                  value: "meta-llama/Llama-3.2-1B"
+                - name: NV_INGEST_MESSAGE_HOST
+                  value: "nv-ingest.nv-ingest.svc.cluster.local"
+                - name: NV_INGEST_MESSAGE_PORT
+                  value: "7670"
+                - name: MILVUS_URI
+                  value: "http://milvus.milvus.svc.cluster.local:19530"
+                - name: MINIO_ENDPOINT
+                  value: "milvus-minio.milvus.svc.cluster.local:9000"
+                - name: MINIO_BUCKET
+                  value: "nv-ingest"
+                - name: FILE_CHUNK_SIZE
+                  value: "64"
+                - name: URL_FILE_CHUNK_SIZE
+                  value: "64"
+                - name: PDF_FILE_CHUNK_SIZE
+                  value: "8"
+                - name: CLIENT_BATCH_SIZE
+                  value: "16"
+                - name: CLIENT_CONCURRENCY_LIMIT
+                  value: "16"
+                - name: SAVE_RESULTS_TO_DISK
+                  value: "true"
+                - name: RESULTS_BASE_PATH
+                  value: "/tmp/nv-ingest/results"
+                - name: NEVER_DROP_COLLECTIONS
+                  value: "true"
+                - name: INGEST_LOG_LEVEL
+                  value: "INFO"
+                - name: INGEST_VERSION
+                  value: "v1"
+                - name: INGEST_RUN_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: STATUS_REPORT_PATH
+                  value: "/manifests/status/kubernetes-status.json"
+                - name: FAILURES_REPORT_PATH
+                  value: "/manifests/failures/kubernetes-failures.json"
+              envFrom:
+                - secretRef:
+                    name: url-ingest-secret
+              volumeMounts:
+                - name: url-data
+                  mountPath: /workspace/urls
+                  readOnly: true
+                - name: pdf-data
+                  mountPath: /workspace/pdf-server
+                  readOnly: true
+                - name: manifests
+                  mountPath: /manifests
+                - name: ingest-work
+                  mountPath: /tmp/nv-ingest
+              resources:
+                requests:
+                  memory: 1Gi
+                  cpu: "1"
+                  ephemeral-storage: 2Gi
+                limits:
+                  memory: 4Gi
+                  cpu: "2"
+                  ephemeral-storage: 10Gi
+              securityContext:
+                runAsNonRoot: false
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          volumes:
+            - name: url-data
+              persistentVolumeClaim:
+                claimName: url-ingest-data
+            - name: pdf-data
+              persistentVolumeClaim:
+                claimName: pdf-server-data
+            - name: manifests
+              persistentVolumeClaim:
+                claimName: url-ingest-manifests
+            - name: url-lists
+              configMap:
+                name: url-ingest-k8s-urls
+            - name: ingest-work
+              emptyDir:
+                sizeLimit: 10Gi

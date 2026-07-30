@@ -1,0 +1,222 @@
+# Leave empty to use the Helm release namespace. Set only for compatibility
+# with an existing release whose resources intentionally live elsewhere.
+namespaceOverride: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: vllm/vllm-openai
+  # The multimodal embedder requires vLLM 0.17.0 or newer.
+  tag: v0.17.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automountServiceAccountToken: false
+
+# The models are currently public. Set existingSecret only when a Hugging Face
+# token is required by your environment or by a pinned/private model revision.
+huggingFace:
+  existingSecret: ""
+  tokenKey: token
+  cacheMountPath: /data/huggingface
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Daedalus and NV-Ingest currently use NVIDIA NIM request/response shapes.
+# This sidecar preserves those APIs while also proxying native vLLM requests.
+nimCompatibility:
+  enabled: true
+  port: 8080
+  image:
+    repository: python
+    tag: 3.12.11-alpine3.22
+    pullPolicy: IfNotPresent
+  requestTimeoutSeconds: 300
+  maxRequestBytes: "67108864"
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+
+terminationGracePeriodSeconds: 60
+
+probes:
+  startup:
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 180
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  liveness:
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+reranker:
+  enabled: true
+  replicaCount: 1
+  model: nvidia/llama-nemotron-rerank-1b-v2
+  servedModelName: nvidia/llama-nemotron-rerank-1b-v2
+  revision: d896ceda696c5c6fe0abf65f63a77c691bbf4548
+  configSha256: 34d45f095f896f950db008c19e2bb4c935fc2866f71212c0cd26022eb1167d7b
+  port: 8000
+  maxModelLen: 8192
+  # NVIDIA requires this score template for correct query/document formatting.
+  chatTemplate: |-
+    question:{{ (messages | selectattr("role", "eq", "query") | first).content }}
+
+    passage:{{ (messages | selectattr("role", "eq", "document") | first).content }}
+  extraArgs: []
+  extraEnv: []
+  service:
+    type: ClusterIP
+    port: 8000
+    # Set when type is NodePort to reserve a specific port. Leave null to let
+    # Kubernetes allocate one from the cluster's configured NodePort range.
+    nodePort: null
+    annotations: {}
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+      nvidia.com/gpu: "1"
+    limits:
+      cpu: "4"
+      memory: 16Gi
+      nvidia.com/gpu: "1"
+  persistence:
+    enabled: true
+    # Set true only when existingClaim/storageClass is verified to support
+    # simultaneous mounts from replicas on distinct nodes.
+    multiReplicaSafe: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+    keep: false
+  shm:
+    sizeLimit: 2Gi
+  strategy:
+    type: Recreate
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+  runtimeClassName: ""
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+embedder:
+  enabled: true
+  replicaCount: 1
+  model: nvidia/llama-nemotron-embed-vl-1b-v2
+  servedModelName: nvidia/llama-nemotron-embed-vl-1b-v2
+  revision: 582e3bf72aee355e3c59ed89de53543c5b0657ee
+  configSha256: f2dfebb580204fe735f6e8b5519d1ed612c6a22df8ab1b4ac26776d910128a46
+  port: 8000
+  # 10240 is required for combined image+text inputs; 2048 is sufficient for
+  # image-only or text-only inputs if GPU memory is constrained.
+  maxModelLen: 10240
+  extraArgs: []
+  extraEnv: []
+  service:
+    type: ClusterIP
+    port: 8000
+    # Set when type is NodePort to reserve a specific port. Leave null to let
+    # Kubernetes allocate one from the cluster's configured NodePort range.
+    nodePort: null
+    annotations: {}
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+      nvidia.com/gpu: "1"
+    limits:
+      cpu: "4"
+      memory: 16Gi
+      nvidia.com/gpu: "1"
+  persistence:
+    # Independent emptyDir caches let replicas mount and roll on distinct GPU
+    # nodes. Production rollout must pre-pull/warm the pinned model revision.
+    enabled: false
+    # Set true only when existingClaim/storageClass is verified to support
+    # simultaneous mounts from replicas on distinct nodes.
+    multiReplicaSafe: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+    keep: false
+  shm:
+    sizeLimit: 2Gi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+  runtimeClassName: ""
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces:
+    - daedalus
+    - nv-ingest
+
+tests:
+  enabled: true
+  image:
+    repository: curlimages/curl
+    tag: 8.15.0
+    pullPolicy: IfNotPresent

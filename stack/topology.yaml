@@ -1,0 +1,104 @@
+apiVersion: daedalus.context/v1
+kind: Topology
+partOf: daedalus-context
+releases:
+  milvus:
+    owner: nim-milvus-ms
+    tier: online
+    namespace: milvus
+    requiredFor: [domain-retrieval, existing-document-search]
+    services:
+      api:
+        name: milvus
+        port: 19530
+        protocol: tcp
+      objectStore:
+        name: milvus-minio
+        port: 9000
+        protocol: http
+        healthPath: /minio/health/ready
+  retriever:
+    owner: nemotron-retriever
+    tier: online
+    namespace: daedalus-retriever
+    requiredFor: [domain-retrieval, existing-document-search]
+    services:
+      embeddings:
+        name: nemotron-retriever-embedder
+        port: 8000
+        protocol: http
+        healthPath: /adapter-health
+      reranker:
+        name: nemotron-retriever-reranker
+        port: 8000
+        protocol: http
+        healthPath: /adapter-health
+        optional: true
+  nv-ingest:
+    owner: nv-ingest
+    tier: ingestion
+    namespace: nv-ingest
+    requiredFor: [new-document-ingestion, collection-refresh]
+    dependsOn: [milvus, retriever]
+    services:
+      api:
+        name: nv-ingest
+        port: 7670
+        protocol: http
+        healthPath: /v1/health/ready
+  pdf-server:
+    owner: pdf-server
+    tier: ingestion
+    namespace: milvus
+    requiredFor: [collection-refresh]
+    services:
+      corpus:
+        name: pdf-server
+        port: 80
+        protocol: http
+        healthPath: /readyz
+  url-ingest:
+    owner: url-ingest
+    tier: ingestion
+    namespace: milvus
+    requiredFor: [collection-refresh]
+    dependsOn: [milvus, retriever, nv-ingest, pdf-server]
+    services: {}
+  k8s-mcp:
+    owner: k8s-multicluster-mcp
+    tier: tools
+    namespace: k8s-mcp-server
+    requiredFor: []
+    services:
+      mcp:
+        name: k8s-mcp-server
+        port: 8080
+        protocol: http
+        livePath: /livez
+        readyPath: /readyz
+        dependencyPath: /dependencyz
+        mcpPath: /mcp
+  unifi-mcp:
+    owner: unifi-network-mcp
+    tier: tools
+    namespace: unifi-network-mcp-server
+    requiredFor: []
+    services:
+      mcp:
+        name: unifi-network-mcp-server
+        port: 8080
+        protocol: http
+        livePath: /livez
+        readyPath: /readyz
+        dependencyPath: /dependencyz
+        mcpPath: /mcp
+profiles:
+  online-required: [milvus, retriever]
+  ingestion: [milvus, retriever, nv-ingest, pdf-server, url-ingest]
+  tools: [k8s-mcp, unifi-mcp]
+  all: [milvus, retriever, nv-ingest, pdf-server, url-ingest, k8s-mcp, unifi-mcp]
+failurePolicy:
+  coreChatRequiresContext: false
+  reranker: fail-open
+  ingestionFailureAffectsExistingSearch: false
+  optionalToolFailureAffectsCoreChat: false

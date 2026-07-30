@@ -1,0 +1,178 @@
+name: daedalus-context
+
+services:
+  k8s-mcp-server-read-only:
+    build:
+      context: ./k8s-multicluster-mcp/src
+      dockerfile: Dockerfile
+    image: ${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0}
+    environment:
+      KUBECONFIG: /home/appuser/.kube/config
+      SERVER_MODE: streamable-http
+      SERVER_PORT: "8080"
+      SERVER_READ_ONLY: "true"
+      MCP_REQUIRE_AUTH: ${K8S_MCP_REQUIRE_AUTH:-false}
+      MCP_AUTH_TOKEN: ${K8S_MCP_AUTH_TOKEN:-}
+      MCP_AUTH_TOKEN_NEXT: ${K8S_MCP_AUTH_TOKEN_NEXT:-}
+      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL:-}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-}
+    volumes:
+      - type: bind
+        source: ${COMPOSE_KUBECONFIG_PATH:-/tmp/daedalus-context-compose-1000/kubeconfig}
+        target: /home/appuser/.kube/config
+        read_only: true
+      - type: volume
+        source: opencode-data
+        target: /home/appuser/.local/share/opencode
+      - type: volume
+        source: opencode-cache
+        target: /home/appuser/.cache/opencode
+    group_add:
+      - "${KUBECONFIG_GROUP_ID:-1000}"
+    ports:
+      - "${K8S_MCP_HOST_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/livez"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - context
+    restart: unless-stopped
+
+  unifi-network-mcp-server:
+    build:
+      context: ./unifi-network-mcp/src
+      dockerfile: Dockerfile
+    image: ${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0}
+    environment:
+      SERVER_MODE: streamable-http
+      SERVER_PORT: "8080"
+      MCP_AUTH_TOKEN: ${UNIFI_MCP_AUTH_TOKEN:-}
+      MCP_AUTH_TOKEN_NEXT: ${UNIFI_MCP_AUTH_TOKEN_NEXT:-}
+      MCP_REQUIRE_AUTH: ${UNIFI_MCP_REQUIRE_AUTH:-false}
+      UNIFI_BASE_URL: ${UNIFI_BASE_URL:-}
+      UNIFI_INSECURE_SKIP_VERIFY: ${UNIFI_INSECURE_SKIP_VERIFY:-}
+      UNIFI_API_KEY: ${UNIFI_API_KEY:-}
+      UNIFI_FIXED_CONTROLLER: ${UNIFI_FIXED_CONTROLLER:-false}
+    ports:
+      - "${UNIFI_MCP_HOST_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/livez"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - context
+    restart: unless-stopped
+
+  pdf-server:
+    build:
+      context: ./pdf-server
+      dockerfile: Dockerfile
+    image: ${PDF_SERVER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0}
+    ports:
+      - "${PDF_SERVER_HOST_PORT:-8080}:80"
+    volumes:
+      - type: bind
+        source: ./pdf-server/nginx.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+      - type: bind
+        source: ./pdf-server/nvidia
+        target: /usr/share/nginx/pdfs/nvidia
+        read_only: true
+      - type: bind
+        source: ./pdf-server/kubernetes
+        target: /usr/share/nginx/pdfs/kubernetes
+        read_only: true
+      - type: bind
+        source: ./pdf-server/semianalysis
+        target: /usr/share/nginx/pdfs/semianalysis
+        read_only: true
+      - type: bind
+        source: ./pdf-server/mentalhealth
+        target: /usr/share/nginx/pdfs/mentalhealth
+        read_only: true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/pdfs/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    networks:
+      - context
+    restart: unless-stopped
+
+  url-ingest:
+    profiles: ["ingest"]
+    build:
+      context: ./url-ingest
+      dockerfile: Dockerfile
+    image: ${URL_INGEST_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0}
+    entrypoint: ["sh", "/entrypoint-url-ingest.sh"]
+    volumes:
+      - type: bind
+        source: ./url-ingest/downloaded_urls
+        target: /downloaded_urls
+      - type: bind
+        source: ./url-ingest/files
+        target: /files
+        read_only: true
+      - type: bind
+        source: ./url-ingest/entrypoint-url-ingest.sh
+        target: /entrypoint-url-ingest.sh
+        read_only: true
+    networks:
+      - context
+    tty: true
+    stdin_open: true
+
+  nv-ingest-ms-tasks:
+    profiles: ["ingest"]
+    build:
+      context: ./url-ingest
+      dockerfile: Dockerfile.runner
+    image: ${URL_INGEST_RUNNER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      URL_FILE_CHUNK_SIZE: "64"
+      PDF_FILE_CHUNK_SIZE: "16"
+      CLIENT_BATCH_SIZE: "16"
+      CLIENT_CONCURRENCY_LIMIT: "16"
+      SAVE_RESULTS_TO_DISK: "true"
+      RESULTS_BASE_PATH: /tmp/nv-ingest/results
+      MANIFEST_BASE_PATH: /manifests
+      FAILURES_REPORT_PATH: /manifests/failures/local-failures.json
+      STATUS_REPORT_PATH: /manifests/status/local-status.json
+      INGEST_VERSION: v1
+    env_file:
+      - path: ./url-ingest/.env
+        required: false
+    ipc: host
+    volumes:
+      - type: bind
+        source: ./pdf-server
+        target: /workspace/pdf-server
+        read_only: true
+      - type: bind
+        source: ./url-ingest/downloaded_urls
+        target: /workspace/urls
+        read_only: true
+      - type: bind
+        source: ./url-ingest/manifests
+        target: /manifests
+    working_dir: /workspace
+    networks:
+      - context
+
+networks:
+  context:
+    name: daedalus-context
+
+volumes:
+  opencode-data:
+  opencode-cache:

@@ -1,0 +1,312 @@
+functions:
+  # ── Kubernetes — Core & Discovery (Read-Only) ──────────────────────────
+
+  k8s_mcp_get_api_resources:
+    _type: mcp_tool_wrapper
+    description: Lists the available API resources in the Kubernetes cluster, similar to `kubectl api-resources`. Use this to discover what resources are available in the cluster.
+    mcp_tool_name: getAPIResources
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_list_resources:
+    _type: mcp_tool_wrapper
+    description: Lists all instances of a specific resource type (e.g., pods, services, deployments) in the Kubernetes cluster. Supports namespace, label selector, and field selector filtering.
+    mcp_tool_name: listResources
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_resource:
+    _type: mcp_tool_wrapper
+    description: Retrieves the full JSON representation of a specific Kubernetes resource by kind and name, similar to `kubectl get -o json`.
+    mcp_tool_name: getResource
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_describe_resource:
+    _type: mcp_tool_wrapper
+    description: Provides detailed information about a specific Kubernetes resource including events and owner references, similar to `kubectl describe`.
+    mcp_tool_name: describeResource
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_pods_logs:
+    _type: mcp_tool_wrapper
+    description: Retrieves logs from a specific pod in the Kubernetes cluster. Supports single container or all containers, similar to `kubectl logs`.
+    mcp_tool_name: getPodsLogs
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_node_metrics:
+    _type: mcp_tool_wrapper
+    description: Retrieves CPU and memory resource usage metrics for a specific node. Requires metrics-server.
+    mcp_tool_name: getNodeMetrics
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_pod_metrics:
+    _type: mcp_tool_wrapper
+    description: Retrieves CPU and memory metrics for a specific pod and its containers. Requires metrics-server.
+    mcp_tool_name: getPodMetrics
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_events:
+    _type: mcp_tool_wrapper
+    description: Retrieves events for a specific namespace or across all namespaces, similar to `kubectl get events`. Useful for troubleshooting.
+    mcp_tool_name: getEvents
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_ingresses:
+    _type: mcp_tool_wrapper
+    description: Retrieves Ingress resources from the Kubernetes cluster, optionally filtered by hostname. Shows routing rules, paths, and backend services.
+    mcp_tool_name: getIngresses
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — Enhanced Resource Inspection (Read-Only) ──────────────
+
+  k8s_mcp_get_resource_yaml:
+    _type: mcp_tool_wrapper
+    description: Exports a Kubernetes resource as clean YAML, similar to `kubectl get -o yaml`. Useful for inspection and backup.
+    mcp_tool_name: getResourceYAML
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_resource_diff:
+    _type: mcp_tool_wrapper
+    description: Compares current resource state with a previous version or another resource. Useful for understanding what changed after an update.
+    mcp_tool_name: getResourceDiff
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_namespace_resources:
+    _type: mcp_tool_wrapper
+    description: Lists all resource instances within a specific namespace with optional type filtering. Useful for getting an overview of what is running in a namespace.
+    mcp_tool_name: getNamespaceResources
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_resource_owners:
+    _type: mcp_tool_wrapper
+    description: Traces the ownership chain of a resource (e.g., Pod -> ReplicaSet -> Deployment). Optionally shows child resources.
+    mcp_tool_name: getResourceOwners
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — Monitoring & Observability (Read-Only) ────────────────
+
+  k8s_mcp_get_cluster_health:
+    _type: mcp_tool_wrapper
+    description: Gets a comprehensive cluster health report including node status, control plane component health, and recent warning events.
+    mcp_tool_name: getClusterHealth
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_cluster_summary:
+    _type: mcp_tool_wrapper
+    description: Gets a concise high-level cluster status overview including active context, version, node health, namespace listing, workload health, pod phase counts, and recent warning events.
+    mcp_tool_name: getClusterSummary
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_resource_quotas:
+    _type: mcp_tool_wrapper
+    description: Lists ResourceQuota objects and their current usage vs. limits. Useful for diagnosing quota exceeded errors.
+    mcp_tool_name: getResourceQuotas
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_limit_ranges:
+    _type: mcp_tool_wrapper
+    description: Lists LimitRange objects that define default and maximum resource requests/limits for containers in a namespace.
+    mcp_tool_name: getLimitRanges
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_top_pods:
+    _type: mcp_tool_wrapper
+    description: Gets the top resource-consuming pods sorted by CPU or memory usage, similar to `kubectl top pods`.
+    mcp_tool_name: getTopPods
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_top_nodes:
+    _type: mcp_tool_wrapper
+    description: Gets nodes ranked by resource utilization with capacity information, similar to `kubectl top nodes`.
+    mcp_tool_name: getTopNodes
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — Debugging & Troubleshooting (Read-Only) ───────────────
+
+  k8s_mcp_get_pod_debug_info:
+    _type: mcp_tool_wrapper
+    description: Gets comprehensive debugging information for a pod including conditions, container statuses, events, and recent logs from all containers.
+    mcp_tool_name: getPodDebugInfo
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_service_endpoints:
+    _type: mcp_tool_wrapper
+    description: Lists all endpoints (backing pods) for a Kubernetes Service with their IP addresses, ports, and health status.
+    mcp_tool_name: getServiceEndpoints
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_network_policies:
+    _type: mcp_tool_wrapper
+    description: Lists NetworkPolicy objects in a namespace and shows which pods they affect. Useful for diagnosing network connectivity issues.
+    mcp_tool_name: getNetworkPolicies
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_security_context:
+    _type: mcp_tool_wrapper
+    description: Inspects the security context configuration for a pod and all its containers, including runAsUser, capabilities, and privilege settings.
+    mcp_tool_name: getSecurityContext
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_resource_history:
+    _type: mcp_tool_wrapper
+    description: Gets recent events and changes for a specific resource over a configurable time window.
+    mcp_tool_name: getResourceHistory
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_validate_manifest:
+    _type: mcp_tool_wrapper
+    description: Validates a Kubernetes manifest without applying it (server-side dry-run). Checks for schema errors, missing required fields, and invalid values.
+    mcp_tool_name: validateManifest
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — GPU Debugging & Troubleshooting ──────────────────────
+
+  k8s_mcp_get_gpu_cluster_overview:
+    _type: mcp_tool_wrapper
+    description: Gets a comprehensive overview of GPU resources across the cluster including GPU capacity, allocatable resources, workloads, node labels, taints, and recent GPU-related events.
+    mcp_tool_name: getGPUClusterOverview
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_diagnose_gpu_scheduling:
+    _type: mcp_tool_wrapper
+    description: Diagnoses why a specific pod cannot schedule on or use GPU nodes by checking requests, node capacity, taints, selectors, affinity, and events.
+    mcp_tool_name: diagnoseGPUScheduling
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_gpu_operator_health:
+    _type: mcp_tool_wrapper
+    description: Checks NVIDIA GPU operator and device plugin health, including daemonset status, operator pods, logs, node labels, runtime classes, and events.
+    mcp_tool_name: getGPUOperatorHealth
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — Navigation (Read-Only) ────────────────────────────────
+
+  k8s_mcp_list_namespaces:
+    _type: mcp_tool_wrapper
+    description: Lists all namespaces in the Kubernetes cluster with their status and labels, similar to `kubectl get namespaces`.
+    mcp_tool_name: listNamespaces
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_get_rollout_status:
+    _type: mcp_tool_wrapper
+    description: Gets the rollout status of a Deployment, StatefulSet, or DaemonSet, including replica counts and conditions.
+    mcp_tool_name: getRolloutStatus
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_list_contexts:
+    _type: mcp_tool_wrapper
+    description: Lists all available kubeconfig contexts and identifies which one is currently active.
+    mcp_tool_name: listContexts
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Kubernetes — Write Operations ──────────────────────────────────────
+
+  k8s_mcp_create_resource:
+    _type: mcp_tool_wrapper
+    description: Creates or updates a Kubernetes resource from a JSON manifest (server-side apply). WRITE OPERATION.
+    mcp_tool_name: createResource
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_create_resource_yaml:
+    _type: mcp_tool_wrapper
+    description: Creates or updates a Kubernetes resource from a YAML manifest (server-side apply). WRITE OPERATION.
+    mcp_tool_name: createResourceYAML
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_delete_resource:
+    _type: mcp_tool_wrapper
+    description: Deletes a Kubernetes resource by kind and name. Destructive and cannot be undone. WRITE OPERATION.
+    mcp_tool_name: deleteResource
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_rollout_restart:
+    _type: mcp_tool_wrapper
+    description: Performs a rolling restart on a workload (Deployment, DaemonSet, StatefulSet, ReplicaSet). WRITE OPERATION.
+    mcp_tool_name: rolloutRestart
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_exec_in_pod:
+    _type: mcp_tool_wrapper
+    description: Executes a command inside a running pod container, similar to `kubectl exec`. DANGEROUS OPERATION; requires explicit exec capability.
+    mcp_tool_name: execInPod
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_scale_resource:
+    _type: mcp_tool_wrapper
+    description: Scales a workload to a desired number of replicas, similar to `kubectl scale`. WRITE OPERATION.
+    mcp_tool_name: scaleResource
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_remediate_gpu_issue:
+    _type: mcp_tool_wrapper
+    description: Performs a GPU remediation action such as removing a taint, adding a GPU label, restarting the NVIDIA device plugin, restarting the GPU operator, or annotating a node. WRITE OPERATION.
+    mcp_tool_name: remediateGPUIssue
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_run_kubectl_command:
+    _type: mcp_tool_wrapper
+    description: Executes a direct kubectl command on the MCP server host. Requires kubectl in PATH. Pipes, redirects, shell expansions, and command chaining are not supported. DANGEROUS OPERATION; requires explicit kubectl capability.
+    mcp_tool_name: runKubectlCommand
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_devops_agent:
+    _type: mcp_tool_wrapper
+    description: Launches an autonomous opencode-powered DevOps agent through the MCP server. In parent read-only mode the agent is forced to inspection-only behavior.
+    mcp_tool_name: devopsAgent
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Helm — Read-Only ───────────────────────────────────────────────────
+
+  k8s_mcp_helm_list:
+    _type: mcp_tool_wrapper
+    description: Lists Helm releases with their status, chart version, and app version, similar to `helm list`.
+    mcp_tool_name: helmList
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_get:
+    _type: mcp_tool_wrapper
+    description: Gets detailed information about a specific Helm release including chart, values, and manifest, similar to `helm get all`.
+    mcp_tool_name: helmGet
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_history:
+    _type: mcp_tool_wrapper
+    description: Gets the revision history of a Helm release showing all past upgrades and rollbacks, similar to `helm history`.
+    mcp_tool_name: helmHistory
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_repo_list:
+    _type: mcp_tool_wrapper
+    description: Lists all configured Helm chart repositories with their names and URLs, similar to `helm repo list`.
+    mcp_tool_name: helmRepoList
+    url: ${KUBERNETES_MCP_SERVER}
+
+  # ── Helm — Write Operations ────────────────────────────────────────────
+
+  k8s_mcp_helm_install:
+    _type: mcp_tool_wrapper
+    description: Installs a Helm chart to the Kubernetes cluster, similar to `helm install`. WRITE OPERATION.
+    mcp_tool_name: helmInstall
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_upgrade:
+    _type: mcp_tool_wrapper
+    description: Upgrades an existing Helm release to a new chart version or with new values, similar to `helm upgrade`. WRITE OPERATION.
+    mcp_tool_name: helmUpgrade
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_uninstall:
+    _type: mcp_tool_wrapper
+    description: Uninstalls a Helm release, removing all associated Kubernetes resources, similar to `helm uninstall`. WRITE OPERATION.
+    mcp_tool_name: helmUninstall
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_rollback:
+    _type: mcp_tool_wrapper
+    description: Rolls back a Helm release to a previous revision, similar to `helm rollback`. WRITE OPERATION.
+    mcp_tool_name: helmRollback
+    url: ${KUBERNETES_MCP_SERVER}
+
+  k8s_mcp_helm_repo_add:
+    _type: mcp_tool_wrapper
+    description: Adds a Helm chart repository so that charts from it can be installed, similar to `helm repo add`. WRITE OPERATION.
+    mcp_tool_name: helmRepoAdd
+    url: ${KUBERNETES_MCP_SERVER}

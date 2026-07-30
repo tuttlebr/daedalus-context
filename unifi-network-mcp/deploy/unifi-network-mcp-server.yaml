@@ -1,0 +1,287 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: unifi-network-mcp-server
+  labels:
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unifi-network-mcp-server
+  namespace: unifi-network-mcp-server
+  labels:
+    app: unifi-network-mcp-server
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: unifi-inventory
+automountServiceAccountToken: false
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unifi-network-mcp-server
+  namespace: unifi-network-mcp-server
+  labels:
+    app: unifi-network-mcp-server
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: unifi-inventory
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: unifi-network-mcp-server
+  template:
+    metadata:
+      labels:
+        app: unifi-network-mcp-server
+        app.kubernetes.io/name: unifi-network-mcp-server
+        app.kubernetes.io/instance: unifi-network-mcp-server
+        app.kubernetes.io/version: "__APP_VERSION__"
+        app.kubernetes.io/component: mcp
+        app.kubernetes.io/part-of: daedalus-context
+        app.kubernetes.io/managed-by: contextctl
+        daedalus.ai/tier: tools
+        daedalus.ai/capability: unifi-inventory
+      annotations:
+        checksum/auth: "__AUTH_CHECKSUM__"
+        checksum/controller-config: "__CONTROLLER_CHECKSUM__"
+    spec:
+      serviceAccountName: unifi-network-mcp-server
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: unifi-network-mcp-server
+      containers:
+        - name: unifi-network-mcp-server
+          image: __UNIFI_MCP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          env:
+            - name: SERVER_MODE
+              value: "streamable-http"
+            - name: SERVER_PORT
+              value: "8080"
+            - name: MCP_REQUIRE_AUTH
+              value: "true"
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-network-mcp-auth
+                  key: token
+            - name: MCP_AUTH_TOKEN_NEXT
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-network-mcp-auth
+                  key: next-token
+                  optional: true
+            - name: UNIFI_FIXED_CONTROLLER
+              value: "true"
+            - name: UNIFI_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: unifi-network-mcp-defaults
+                  key: base-url
+                  optional: true
+            - name: UNIFI_INSECURE_SKIP_VERIFY
+              valueFrom:
+                configMapKeyRef:
+                  name: unifi-network-mcp-defaults
+                  key: insecure-skip-verify
+                  optional: true
+            - name: UNIFI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-network-mcp-unifi-api
+                  key: api-key
+                  optional: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unifi-network-mcp-server
+  namespace: unifi-network-mcp-server
+  labels:
+    app: unifi-network-mcp-server
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: unifi-inventory
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: unifi-network-mcp-server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unifi-network-mcp-server
+  namespace: unifi-network-mcp-server
+  annotations:
+    service.cilium.io/src-ranges-policy: allow
+  labels:
+    app: unifi-network-mcp-server
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: unifi-inventory
+spec:
+  # Kubernetes only admits loadBalancerSourceRanges on LoadBalancer Services.
+  # The unclaimed class prevents MetalLB from assigning/advertising an address;
+  # allocateLoadBalancerNodePorts retains the fixed node-address endpoint.
+  type: LoadBalancer
+  loadBalancerClass: daedalus.ai/nodeport-only
+  allocateLoadBalancerNodePorts: true
+  loadBalancerSourceRanges:
+    - __MCP_EXTERNAL_CLIENT_CIDR__
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+  selector:
+    app: unifi-network-mcp-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: __UNIFI_MCP_NODE_PORT__
+      protocol: TCP
+      name: http
+
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: unifi-network-mcp-server-netpol
+  namespace: unifi-network-mcp-server
+  labels:
+    app: unifi-network-mcp-server
+    app.kubernetes.io/name: unifi-network-mcp-server
+    app.kubernetes.io/instance: unifi-network-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: unifi-inventory
+spec:
+  endpointSelector:
+    matchLabels:
+      app: unifi-network-mcp-server
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: daedalus
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toCIDR:
+        - __UNIFI_CONTROLLER_CIDR__
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

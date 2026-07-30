@@ -1,0 +1,13 @@
+# Explicit local-only exposure example. Production deployments should keep the
+# chart default ClusterIP Services and use port-forwarding for diagnostics.
+embedder:
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30085
+
+reranker:
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30086

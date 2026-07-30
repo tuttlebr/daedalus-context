@@ -1,0 +1,41 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+*.local
+
+# Kubernetes credentials and discovery cache
+kube/config
+kube/cache/
+*.kubeconfig
+
+# Go build artifacts
+src/k8s-mcp-server
+coverage.out
+src/coverage.out
+bin/
+dist/
+tmp/
+*.exe
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# Logs / scratch
+*.log
+*.tmp
+
+# Upstream embedded git repo (src is a fork)
+src/.git/
+
+# OpenCode agent skills (user-local, not committed)
+src/skills/*/

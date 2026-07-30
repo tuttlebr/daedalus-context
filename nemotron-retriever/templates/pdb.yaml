@@ -1,0 +1,19 @@
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if and $server.enabled $server.podDisruptionBudget.enabled (gt (int $server.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
+  labels:
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  minAvailable: {{ $server.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}

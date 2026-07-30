@@ -1,0 +1,513 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-mcp-server
+  labels:
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-mcp-server
+  namespace: k8s-mcp-server
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-mcp-server-readonly
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: observer-rbac
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+rules:
+  # Observer profile. Secret data and Helm release Secrets are intentionally
+  # excluded; deploy a separately reviewed identity if release metadata is
+  # required.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - namespaces
+      - nodes
+      - persistentvolumes
+      - persistentvolumeclaims
+      - events
+      - replicationcontrollers
+      - serviceaccounts
+      - resourcequotas
+      - limitranges
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+      - ingressclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+      - volumeattachments
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - pods
+      - nodes
+    verbs: ["get", "list"]
+  # Discovery endpoints required by client-go's ServerPreferredResources
+  - nonResourceURLs: ["/api", "/api/v1", "/apis", "/healthz", "/version"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-mcp-server-readonly
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: observer-rbac
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-mcp-server-readonly
+subjects:
+  - kind: ServiceAccount
+    name: k8s-mcp-server
+    namespace: k8s-mcp-server
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-mcp-server
+  namespace: k8s-mcp-server
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: k8s-mcp-server
+  template:
+    metadata:
+      labels:
+        app: k8s-mcp-server
+        app.kubernetes.io/name: k8s-mcp-server
+        app.kubernetes.io/instance: k8s-mcp-server
+        app.kubernetes.io/version: "__APP_VERSION__"
+        app.kubernetes.io/component: mcp
+        app.kubernetes.io/part-of: daedalus-context
+        app.kubernetes.io/managed-by: contextctl
+        daedalus.ai/tier: tools
+        daedalus.ai/capability: kubernetes-operations
+      annotations:
+        checksum/auth: "__AUTH_CHECKSUM__"
+        checksum/agent-config: "__AGENT_CONFIG_CHECKSUM__"
+    spec:
+      serviceAccountName: k8s-mcp-server
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: k8s-mcp-server
+      containers:
+        - name: k8s-mcp-server
+          image: __K8S_MCP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          env:
+            - name: SERVER_MODE
+              value: "streamable-http"
+            - name: SERVER_PORT
+              value: "8080"
+            - name: SERVER_READ_ONLY
+              value: "true"
+            - name: SERVER_NO_HELM
+              value: "true"
+            - name: MCP_REQUIRE_AUTH
+              value: "true"
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-mcp-auth
+                  key: token
+            - name: MCP_AUTH_TOKEN_NEXT
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-mcp-auth
+                  key: next-token
+                  optional: true
+            # DevOps agent (optional — omit to disable devopsAgent tool)
+            - name: OPENCODE_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-mcp-agent-config
+                  key: base-url
+                  optional: true
+            - name: OPENCODE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-mcp-agent-config
+                  key: api-key
+                  optional: true
+            - name: OPENCODE_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: k8s-mcp-agent-config
+                  key: model
+                  optional: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: helm-cache
+              mountPath: /home/appuser/.cache/helm
+            - name: helm-config
+              mountPath: /home/appuser/.config/helm
+            - name: opencode-data
+              mountPath: /home/appuser/.local/share/opencode
+            - name: opencode-cache
+              mountPath: /home/appuser/.cache/opencode
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: helm-cache
+          emptyDir: {}
+        - name: helm-config
+          emptyDir: {}
+        - name: opencode-data
+          emptyDir: {}
+        - name: opencode-cache
+          emptyDir: {}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: k8s-mcp-server
+  namespace: k8s-mcp-server
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: k8s-mcp-server
+
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: k8s-mcp-server-netpol
+  namespace: k8s-mcp-server
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+spec:
+  endpointSelector:
+    matchLabels:
+      app: k8s-mcp-server
+  ingress:
+    # Allow health checks from the kubelet and authenticated NodePort traffic
+    # forwarded by another cluster node.
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow the Daedalus backend namespace.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: daedalus
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # Allow DNS resolution (pod-networked CoreDNS)
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Allow DNS resolution (host-networked CoreDNS, bare-metal / kubeadm)
+    - toEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Allow access to Kubernetes API server
+    - toEntities:
+        - kube-apiserver
+---
+# NOTE: toFQDNs and toCIDR MUST live in separate CiliumNetworkPolicy
+# resources -- Cilium 1.19+ rejects policies that combine toCIDR (generated
+# internally by toFQDNs) with toCIDR/toCIDRSet.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: k8s-mcp-server-fqdn-egress
+  namespace: k8s-mcp-server
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+spec:
+  endpointSelector:
+    matchLabels:
+      app: k8s-mcp-server
+  egress:
+    # DNS (required for FQDN resolution in this policy)
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Host-networked CoreDNS (bare-metal / kubeadm)
+    - toEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Allow HTTPS egress to external FQDNs
+    - toFQDNs:
+        - matchPattern: "*.nvidia.com"
+        - matchPattern: "*.us-east-1.compute.amazonaws.com"
+        - matchPattern: "*.us-east-2.compute.amazonaws.com"
+        - matchPattern: "*.us-west-1.compute.amazonaws.com"
+        - matchPattern: "*.us-west-2.compute.amazonaws.com"
+        - matchName: "connect.pnats.nvcf.nvidia.com"
+        - matchName: "grpc.api.nvcf.nvidia.com"
+        - matchPattern: "*.api.nvcf.nvidia.com"
+        - matchPattern: "*.sqs.amazonaws.com"
+        - matchName: "spot.gdn.nvidia.com"
+        - matchName: "ess.ngc.nvidia.com"
+        - matchName: "api.ngc.nvidia.com"
+        # GitHub Container Registry (apex required for ghcr.io/org/image pulls)
+        - matchName: "ghcr.io"
+        - matchPattern: "*.ghcr.io"
+        # Docker Hub (registry-1.docker.io + auth.docker.io covered by wildcard)
+        - matchPattern: "*.docker.io"
+        # Quay.io (apex required for quay.io/org/image pulls)
+        - matchName: "quay.io"
+        - matchPattern: "*.quay.io"
+        # Kubernetes image registry (apex required for registry.k8s.io/pause etc.)
+        - matchName: "registry.k8s.io"
+        - matchPattern: "*.registry.k8s.io"
+        # Google Container Registry (legacy k8s.gcr.io + current gcr.io)
+        - matchName: "k8s.gcr.io"
+        - matchName: "gcr.io"
+        - matchPattern: "*.gcr.io"
+        # Google Artifact Registry (modern GCR replacement, e.g. europe-docker.pkg.dev)
+        - matchPattern: "*.pkg.dev"
+        # GCS-backed Helm chart tarballs and other chart repo assets
+        - matchName: "storage.googleapis.com"
+        # GitHub raw content (Helm index.yaml, chart tarballs)
+        - matchPattern: "*.githubusercontent.com"
+        # GitHub Pages (many Helm chart repos, e.g. charts.jetstack.io)
+        - matchPattern: "*.github.io"
+        # Official Helm stable/incubator chart repos
+        - matchName: "charts.helm.sh"
+        # NVIDIA Container Registry (apex required for nvcr.io/nvidia/image pulls)
+        - matchName: "nvcr.io"
+        - matchPattern: "*.nvcr.io"
+        - matchName: "helm.ngc.nvidia.com"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-mcp-server
+  namespace: k8s-mcp-server
+  annotations:
+    service.cilium.io/src-ranges-policy: allow
+  labels:
+    app: k8s-mcp-server
+    app.kubernetes.io/name: k8s-mcp-server
+    app.kubernetes.io/instance: k8s-mcp-server
+    app.kubernetes.io/version: "__APP_VERSION__"
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: tools
+    daedalus.ai/capability: kubernetes-operations
+spec:
+  # Kubernetes only admits loadBalancerSourceRanges on LoadBalancer Services.
+  # The unclaimed class prevents MetalLB from assigning/advertising an address;
+  # allocateLoadBalancerNodePorts retains the fixed node-address endpoint.
+  type: LoadBalancer
+  loadBalancerClass: daedalus.ai/nodeport-only
+  allocateLoadBalancerNodePorts: true
+  loadBalancerSourceRanges:
+    - __MCP_EXTERNAL_CLIENT_CIDR__
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+  selector:
+    app: k8s-mcp-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: __K8S_MCP_NODE_PORT__
+      protocol: TCP
+      name: http

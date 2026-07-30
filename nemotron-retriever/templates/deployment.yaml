@@ -1,0 +1,228 @@
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if $server.enabled }}
+{{- include "nemotron-retriever.validateServer" (dict "server" $server "component" $component) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
+  labels:
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  replicas: {{ $server.replicaCount }}
+  strategy:
+    {{- toYaml $server.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/reranker-template: {{ include (print $.Template.BasePath "/reranker-configmap.yaml") $ | sha256sum }}
+        checksum/nim-compat: {{ include (print $.Template.BasePath "/compatibility-configmap.yaml") $ | sha256sum }}
+        daedalus.ai/model-revision: {{ $server.revision | quote }}
+        daedalus.ai/model-config-sha256: {{ $server.configSha256 | quote }}
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "nemotron-retriever.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "nemotron-retriever.serviceAccountName" $ }}
+      automountServiceAccountToken: {{ $.Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ $.Values.terminationGracePeriodSeconds }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $server.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with $server.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - vllm
+            - serve
+          args:
+            - {{ $server.model | quote }}
+            - --host=0.0.0.0
+            - {{ printf "--port=%d" (int $server.port) | quote }}
+            - {{ printf "--served-model-name=%s" $server.servedModelName | quote }}
+            - --trust-remote-code
+            - {{ printf "--max-model-len=%d" (int $server.maxModelLen) | quote }}
+            {{- with $server.revision }}
+            - {{ printf "--revision=%s" . | quote }}
+            {{- end }}
+            {{- if eq $component "reranker" }}
+            - --runner=pooling
+            - --chat-template=/etc/vllm/templates/nemotron-rerank.jinja
+            {{- end }}
+            {{- with $server.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: HF_HOME
+              value: {{ $.Values.huggingFace.cacheMountPath | quote }}
+            {{- with $.Values.huggingFace.existingSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.huggingFace.tokenKey }}
+            {{- end }}
+            {{- with $server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: vllm-http
+              containerPort: {{ $server.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health
+              port: vllm-http
+            periodSeconds: {{ $.Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ $.Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ $.Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: vllm-http
+            periodSeconds: {{ $.Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ $.Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ $.Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: vllm-http
+            periodSeconds: {{ $.Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ $.Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ $.Values.probes.liveness.failureThreshold }}
+          {{- with $.Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $server.resources | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ $.Values.huggingFace.cacheMountPath }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- if eq $component "reranker" }}
+            - name: reranker-template
+              mountPath: /etc/vllm/templates
+              readOnly: true
+            {{- end }}
+        {{- if $.Values.nimCompatibility.enabled }}
+        - name: nim-compat
+          image: "{{ $.Values.nimCompatibility.image.repository }}:{{ $.Values.nimCompatibility.image.tag }}"
+          imagePullPolicy: {{ $.Values.nimCompatibility.image.pullPolicy }}
+          command:
+            - python3
+            - /opt/nim-compat/nim_compat.py
+          env:
+            - name: LISTEN_PORT
+              value: {{ $.Values.nimCompatibility.port | quote }}
+            - name: UPSTREAM_URL
+              value: {{ printf "http://127.0.0.1:%d" (int $server.port) | quote }}
+            - name: UPSTREAM_TIMEOUT_SECONDS
+              value: {{ $.Values.nimCompatibility.requestTimeoutSeconds | quote }}
+            - name: MAX_REQUEST_BYTES
+              value: {{ $.Values.nimCompatibility.maxRequestBytes | quote }}
+          ports:
+            - name: api
+              containerPort: {{ $.Values.nimCompatibility.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /adapter-health
+              port: api
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /adapter-health
+              port: api
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /adapter-health
+              port: api
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml $.Values.nimCompatibility.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.nimCompatibility.resources | nindent 12 }}
+          volumeMounts:
+            - name: nim-compat
+              mountPath: /opt/nim-compat
+              readOnly: true
+        {{- end }}
+      volumes:
+        - name: model-cache
+          {{- if $server.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "nemotron-retriever.componentName" (dict "root" $ "component" (printf "%s-cache" $component))) $server.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $server.shm.sizeLimit }}
+        {{- if eq $component "reranker" }}
+        - name: reranker-template
+          configMap:
+            name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" "reranker-template") }}
+        {{- end }}
+        {{- if $.Values.nimCompatibility.enabled }}
+        - name: nim-compat
+          configMap:
+            name: {{ include "nemotron-retriever.fullname" $ }}-nim-compat
+            defaultMode: 0444
+        {{- end }}
+      {{- with $server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $server.topologySpread.enabled (gt (int $server.replicaCount) 1) }}
+      topologySpreadConstraints:
+        - maxSkew: {{ $server.topologySpread.maxSkew }}
+          topologyKey: {{ $server.topologySpread.topologyKey }}
+          whenUnsatisfiable: {{ $server.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 14 }}
+      {{- end }}
+      {{- with $server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

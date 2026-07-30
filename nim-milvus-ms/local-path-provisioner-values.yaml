@@ -1,0 +1,78 @@
+# Dedicated dynamic node-local storage for Milvus etcd.
+#
+# This class is intentionally:
+# - non-default, so unrelated workloads continue to use nfs-client;
+# - limited to the three nodes with the most local free space;
+# - Retain, so deleting a PVC does not remove its underlying etcd data; and
+# - local-volume based, so Kubernetes records the volume's node affinity.
+#
+# Rancher local-path-provisioner does not enforce requested PVC capacity. Keep
+# kubelet disk-pressure monitoring enabled and use this class only for the
+# small, latency-sensitive etcd claims.
+
+replicaCount: 1
+
+storageClass:
+  create: true
+  defaultClass: false
+  defaultVolumeType: local
+  name: local-etcd
+  reclaimPolicy: Retain
+  volumeBindingMode: WaitForFirstConsumer
+  allowedTopologies:
+    - matchLabelExpressions:
+        - key: kubernetes.io/hostname
+          values:
+            - daedalus-02
+            - daedalus-03
+            - daedalus-04
+
+nodePathMap:
+  - node: DEFAULT_PATH_FOR_NON_LISTED_NODES
+    paths: []
+  - node: daedalus-02
+    paths:
+      - /var/lib/daedalus-local-path/etcd
+  - node: daedalus-03
+    paths:
+      - /var/lib/daedalus-local-path/etcd
+  - node: daedalus-04
+    paths:
+      - /var/lib/daedalus-local-path/etcd
+
+helperImage:
+  repository: docker.io/library/busybox
+  tag: "1.36.1"
+
+priorityClassName: system-cluster-critical
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsUser: 65534
+  runAsGroup: 65534
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+helperPod:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

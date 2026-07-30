@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "k8s-mcp-server": {
+      "command": "k8s-mcp-server",
+      "args": ["--mode", "stdio"],
+      "env": {
+        "KUBECONFIG": "${env:HOME}/.kube/config"
+      }
+    }
+  }
+}

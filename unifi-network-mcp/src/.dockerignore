@@ -1,0 +1,5 @@
+.git
+.DS_Store
+unifi-network-mcp-server
+coverage.out
+*.test

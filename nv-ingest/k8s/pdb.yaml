@@ -1,0 +1,20 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: nv-ingest
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "26.3.0"
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: ingestion
+    daedalus.ai/capability: document-ingestion
+spec:
+  minAvailable: __MIN_AVAILABLE__
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nv-ingest
+      app.kubernetes.io/instance: __RELEASE_NAME__

@@ -1,0 +1,5 @@
+.env
+src/unifi-network-mcp-server
+coverage.out
+*.test
+.DS_Store

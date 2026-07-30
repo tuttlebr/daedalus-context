@@ -1,0 +1,3 @@
+https://blogs.nvidia.com/sitemap_index.xml
+https://developer.nvidia.com/sitemap_index.xml
+https://nvidianews.nvidia.com/sitemap.xml

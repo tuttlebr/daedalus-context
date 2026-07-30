@@ -1,0 +1,31 @@
+apiVersion: daedalus.context/v1
+kind: RetrievalSchema
+schemaVersion: embed2048-v1
+embedding:
+  model: nvidia/llama-nemotron-embed-vl-1b-v2
+  revision: 582e3bf72aee355e3c59ed89de53543c5b0657ee
+  configSha256: f2dfebb580204fe735f6e8b5519d1ed612c6a22df8ab1b4ac26776d910128a46
+  dimension: 2048
+  maxTokens: 10240
+  queryPrefix: "query: "
+  documentPrefix: "passage: "
+  endpointProfile: nim-embeddings-v1
+reranker:
+  model: nvidia/llama-nemotron-rerank-1b-v2
+  revision: d896ceda696c5c6fe0abf65f63a77c691bbf4548
+  configSha256: 34d45f095f896f950db008c19e2bb4c935fc2866f71212c0cd26022eb1167d7b
+  maxTokens: 8192
+  daedalusEndpointProfile: native-vllm-rerank
+  nimEndpointProfile: nim-ranking-v1
+contracts:
+  native-vllm-rerank:
+    path: /rerank
+    responseField: results
+    scoreField: relevance_score
+  nim-ranking-v1:
+    path: /v1/ranking
+    responseField: rankings
+    scoreField: logit
+  nim-embeddings-v1:
+    path: /v1/embeddings
+    responseField: data

@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["apiVersion", "kind", "components", "models"],
+  "properties": {
+    "apiVersion": { "const": "daedalus.context/v1" },
+    "kind": { "const": "ComponentLock" },
+    "generatedAt": { "type": "string" },
+    "components": {
+      "type": "object",
+      "minProperties": 7,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source", "sourceRevision"],
+        "properties": {
+          "source": { "type": "string", "minLength": 1 },
+          "sourceRevision": {
+            "type": "string",
+            "pattern": "^([a-f0-9]{40}|pending-[a-z0-9-]+)$"
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "required": ["embedding", "reranker"],
+      "properties": {
+        "embedding": { "$ref": "#/definitions/model" },
+        "reranker": { "$ref": "#/definitions/model" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "model": {
+      "type": "object",
+      "required": ["repository", "revision", "configSha256"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "configSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

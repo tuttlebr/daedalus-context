@@ -1,0 +1,32 @@
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if and $server.enabled $server.persistence.enabled (not $server.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" (printf "%s-cache" $component)) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
+  labels:
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+  {{- if or $server.persistence.annotations $server.persistence.keep }}
+  annotations:
+    {{- with $server.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $server.persistence.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $server.persistence.accessModes | nindent 4 }}
+  {{- with $server.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $server.persistence.size }}
+{{- end }}
+{{- end }}

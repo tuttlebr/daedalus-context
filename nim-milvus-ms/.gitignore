@@ -1,0 +1,31 @@
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.local
+*.kubeconfig
+kubeconfig
+
+# OS / editor
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs / scratch
+*.log
+*.tmp
+tmp/
+rendered/
+
+# Helm artifacts
+charts/
+*.tgz
+*.prov
+
+# Python/tool caches
+__pycache__/
+.pytest_cache/
+.cache/

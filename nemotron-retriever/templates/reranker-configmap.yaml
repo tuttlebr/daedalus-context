@@ -1,0 +1,13 @@
+{{- if .Values.reranker.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" . "component" "reranker-template") }}
+  namespace: {{ include "nemotron-retriever.namespace" . }}
+  labels:
+    {{- include "nemotron-retriever.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reranker
+data:
+  nemotron-rerank.jinja: |-
+    {{- .Values.reranker.chatTemplate | nindent 4 }}
+{{- end }}

@@ -1,0 +1,31 @@
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if $server.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
+  labels:
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+  {{- with $server.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $server.service.type }}
+  ports:
+    - name: http
+      port: {{ $server.service.port }}
+      targetPort: {{ ternary "api" "vllm-http" $.Values.nimCompatibility.enabled }}
+      protocol: TCP
+      appProtocol: http
+      {{- if and (eq $server.service.type "NodePort") $server.service.nodePort }}
+      nodePort: {{ $server.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,39 @@
+apiVersion: daedalus.context/v1
+kind: CollectionContract
+schemaVersion: embed2048-v1
+collections:
+  - alias: nvidia
+    sources: [url, pdf]
+    schedule: "0 2 * * 0"
+    freshnessMaximumAgeHours: 192
+    chunkSize: 1024
+    chunkOverlap: 150
+    minimumRecords: 1
+  - alias: kubernetes
+    sources: [url, pdf]
+    schedule: "0 3 * * 0"
+    freshnessMaximumAgeHours: 192
+    chunkSize: 1024
+    chunkOverlap: 64
+    minimumRecords: 1
+  - alias: vetpartner
+    sources: [url]
+    schedule: "0 4 * * 0"
+    freshnessMaximumAgeHours: 192
+    chunkSize: 1024
+    chunkOverlap: 64
+    minimumRecords: 1
+  - alias: semianalysis
+    sources: [url, pdf]
+    schedule: "0 5 * * 0"
+    freshnessMaximumAgeHours: 192
+    chunkSize: 1024
+    chunkOverlap: 64
+    minimumRecords: 1
+  - alias: mentalhealth
+    sources: [pdf]
+    schedule: "0 6 * * 0"
+    freshnessMaximumAgeHours: 192
+    chunkSize: 1024
+    chunkOverlap: 64
+    minimumRecords: 1

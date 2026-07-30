@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-ingest-url-lists
+  namespace: milvus
+  labels:
+    app.kubernetes.io/name: url-ingest
+data:
+  nvidiadocs_url_links.txt: |
+    https://docs.nvidia.com/bsp-sitemap.xml
+    https://docs.nvidia.com/cumulus-networking-ethernet-software-sitemap.xml
+    https://docs.nvidia.com/bsp_sitemap_index.xml
+    https://docs.nvidia.com/s3-sitemap-index.xml
+  nvidia_url_links.txt: |
+    https://blogs.nvidia.com/sitemap_index.xml
+    https://developer.nvidia.com/sitemap_index.xml
+    https://nvidianews.nvidia.com/sitemap.xml
+  semianalysis_url_links.txt: |
+    https://semianalysis.com/wp-sitemap-posts-post-1.xml
+    https://semianalysis.com/wp-sitemap-posts-page-1.xml
+    https://semianalysis.com/wp-sitemap-taxonomies-category-1.xml
+    https://semianalysis.com/wp-sitemap-taxonomies-post_tag-1.xml
+    https://semianalysis.com/wp-sitemap-taxonomies-core-research-tags-1.xml
+    https://semianalysis.com/wp-sitemap-users-1.xml

@@ -1,0 +1,143 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pdf-server-publish-__RUN_ID__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: pdf-server
+    app.kubernetes.io/instance: pdf-server
+    app.kubernetes.io/version: "3.21"
+    app.kubernetes.io/component: corpus-publisher
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: ingestion
+    daedalus.ai/capability: pdf-corpus
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: __DEADLINE_SECONDS__
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pdf-server
+        app.kubernetes.io/instance: pdf-server
+        app.kubernetes.io/version: "3.21"
+        app.kubernetes.io/component: corpus-publisher
+        app.kubernetes.io/part-of: daedalus-context
+        daedalus.ai/tier: ingestion
+        daedalus.ai/capability: pdf-corpus
+    spec:
+      serviceAccountName: pdf-server
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: __SOURCE_NODE__
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: publisher
+          image: alpine:3.21.7
+          env:
+            - name: CORPUS_GENERATION
+              value: "__CORPUS_GENERATION__"
+            - name: PUBLISH_FENCE
+              value: "__PUBLISH_FENCE__"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              generation_root="/destination/.generations/${CORPUS_GENERATION}"
+              staging_root="/destination/.staging/${CORPUS_GENERATION}-$$"
+              publish_lock="/destination/.publish-lock"
+              mkdir "${publish_lock}" 2>/dev/null || {
+                echo "Another corpus publisher owns ${publish_lock}; refusing concurrent publication." >&2
+                exit 1
+              }
+              trap 'rmdir "${publish_lock}"' EXIT
+              test ! -e "${generation_root}" || {
+                echo "Generation already exists: ${generation_root}" >&2
+                exit 1
+              }
+              for collection in nvidia semianalysis kubernetes mentalhealth; do
+                current="/destination/${collection}"
+                if test -e "${current}" && ! test -L "${current}"; then
+                  echo "${current} is a legacy directory; refusing an implicit data migration." >&2
+                  echo "Move every legacy collection into .generations during an approved change window, then retry." >&2
+                  exit 1
+                fi
+              done
+              mkdir -p "${staging_root}"
+              copied=0
+              for collection in nvidia semianalysis kubernetes mentalhealth; do
+                source_dir="/source/${collection}"
+                test -d "${source_dir}" || continue
+                target_dir="${staging_root}/${collection}"
+                mkdir -p "${target_dir}"
+                find "${source_dir}" -maxdepth 1 -type f -name '*.pdf' ! -name '.*' \
+                  -exec cp -- {} "${target_dir}/" \;
+                count="$(find "${target_dir}" -maxdepth 1 -type f -name '*.pdf' | wc -l)"
+                test "${count}" -gt 0 || {
+                  echo "No PDFs found for ${collection}" >&2
+                  exit 1
+                }
+                copied=$((copied + count))
+              done
+              test "${copied}" -gt 0
+              (
+                cd "${staging_root}"
+                find . -type f -name '*.pdf' -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+                sha256sum -c manifest.sha256
+              )
+              printf '%s\n' "${PUBLISH_FENCE}" > "${staging_root}/.publisher-fence"
+              if test -L /destination/current; then
+                previous_fence="$(cat /destination/current/.publisher-fence)"
+                test "${PUBLISH_FENCE}" -gt "${previous_fence}" || {
+                  echo "Publisher fence ${PUBLISH_FENCE} is not newer than ${previous_fence}; refusing pointer regression." >&2
+                  exit 1
+                }
+              fi
+              mkdir -p /destination/.generations
+              mv "${staging_root}" "${generation_root}"
+              for collection_dir in "${generation_root}"/*; do
+                test -d "${collection_dir}" || continue
+                collection="$(basename "${collection_dir}")"
+                current="/destination/${collection}"
+                pointer="/destination/.${collection}.current.$$"
+                ln -s "current/${collection}" "${pointer}"
+                mv -f "${pointer}" "${current}"
+              done
+              pointer="/destination/.current.$$"
+              ln -s ".generations/${CORPUS_GENERATION}" "${pointer}"
+              mv -f "${pointer}" /destination/current
+              printf '%s\n' "${CORPUS_GENERATION}" > /destination/.current-generation.tmp
+              mv -f /destination/.current-generation.tmp /destination/current-generation
+          volumeMounts:
+            - name: source
+              mountPath: /source
+              readOnly: true
+            - name: pdf-data
+              mountPath: /destination
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: source
+          hostPath:
+            path: __SOURCE_PATH__
+            type: Directory
+        - name: pdf-data
+          persistentVolumeClaim:
+            claimName: pdf-server-data

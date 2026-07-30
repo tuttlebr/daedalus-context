@@ -1,0 +1,109 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__-milvus-proxy
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: milvus
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "2.6.11"
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: online
+    daedalus.ai/capability: vector-store
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: __RELEASE_NAME__
+      component: proxy
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__-milvus-querynode
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: milvus
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "2.6.11"
+    app.kubernetes.io/component: querynode
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: online
+    daedalus.ai/capability: vector-store
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: __RELEASE_NAME__
+      component: querynode
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__-milvus-datanode
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: milvus
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "2.6.11"
+    app.kubernetes.io/component: datanode
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: online
+    daedalus.ai/capability: vector-store
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: __RELEASE_NAME__
+      component: datanode
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__-milvus-streamingnode
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: milvus
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "2.6.11"
+    app.kubernetes.io/component: streamingnode
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: ingestion
+    daedalus.ai/capability: vector-store
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: __RELEASE_NAME__
+      component: streamingnode
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: __RELEASE_NAME__-milvus-mixcoord
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: milvus
+    app.kubernetes.io/instance: __RELEASE_NAME__
+    app.kubernetes.io/version: "2.6.11"
+    app.kubernetes.io/component: mixcoord
+    app.kubernetes.io/part-of: daedalus-context
+    app.kubernetes.io/managed-by: contextctl
+    daedalus.ai/tier: online
+    daedalus.ai/capability: vector-store
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: __RELEASE_NAME__
+      component: mixcoord

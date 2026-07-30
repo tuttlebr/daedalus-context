@@ -1,0 +1,41 @@
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "nemotron-retriever.fullname" . }}-test-services
+  namespace: {{ include "nemotron-retriever.namespace" . }}
+  labels:
+    {{- include "nemotron-retriever.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  containers:
+    - name: curl
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      command:
+        - /bin/sh
+        - -ec
+      args:
+        - |
+          {{- if .Values.reranker.enabled }}
+          curl --fail --show-error --silent --retry 30 --retry-delay 2 \
+            http://{{ include "nemotron-retriever.componentName" (dict "root" . "component" "reranker") }}:{{ .Values.reranker.service.port }}/health
+          {{- end }}
+          {{- if .Values.embedder.enabled }}
+          curl --fail --show-error --silent --retry 30 --retry-delay 2 \
+            http://{{ include "nemotron-retriever.componentName" (dict "root" . "component" "embedder") }}:{{ .Values.embedder.service.port }}/health
+          {{- end }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+{{- end }}

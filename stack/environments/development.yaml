@@ -1,0 +1,11 @@
+apiVersion: daedalus.context/v1
+kind: Environment
+name: development
+profile: all
+production: false
+ragReadinessMode: degraded
+requiredCollections: []
+namespaceMode: independent
+acceptance:
+  status: development-only
+  haPhaseBlocked: true

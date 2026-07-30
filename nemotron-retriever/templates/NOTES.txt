@@ -1,0 +1,17 @@
+Nemotron retrieval model servers are configured in {{ include "nemotron-retriever.namespace" . }}.
+
+{{- if .Values.reranker.enabled }}
+Reranker:
+  Native Daedalus: http://{{ include "nemotron-retriever.componentName" (dict "root" . "component" "reranker") }}.{{ include "nemotron-retriever.namespace" . }}.svc.cluster.local:{{ .Values.reranker.service.port }}/rerank
+  NVIDIA NIM:      http://{{ include "nemotron-retriever.componentName" (dict "root" . "component" "reranker") }}.{{ include "nemotron-retriever.namespace" . }}.svc.cluster.local:{{ .Values.reranker.service.port }}/v1/ranking
+{{- end }}
+{{- if .Values.embedder.enabled }}
+Embedder:
+  http://{{ include "nemotron-retriever.componentName" (dict "root" . "component" "embedder") }}.{{ include "nemotron-retriever.namespace" . }}.svc.cluster.local:{{ .Values.embedder.service.port }}/v1/embeddings
+{{- end }}
+
+The first startup downloads model weights and can take several minutes. Watch it with:
+  kubectl --namespace {{ include "nemotron-retriever.namespace" . }} get pods --watch
+
+After both deployments are ready, run the service health test with:
+  helm --namespace {{ .Release.Namespace }} test {{ .Release.Name }}

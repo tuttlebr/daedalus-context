@@ -1,0 +1,118 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: url-ingest-seed-data
+  namespace: milvus
+  labels:
+    app.kubernetes.io/name: url-ingest
+    app.kubernetes.io/component: seed
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: url-ingest
+        app.kubernetes.io/component: seed
+    spec:
+      serviceAccountName: url-ingest
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: __SOURCE_NODE__
+      containers:
+        - name: seed
+          image: alpine:3.21.7
+          env:
+            - name: REQUIRE_SEED_DATA
+              value: "true"
+            - name: PRUNE_STAGED_DATA
+              value: "__PRUNE_STAGED_DATA__"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+
+              echo "=== Seeding downloaded URL data ==="
+
+              if [ ! -d /source/downloaded_urls ] || [ -z "$(ls -A /source/downloaded_urls 2>/dev/null)" ]; then
+                echo "No source data found at /source/downloaded_urls"
+                if [ "${REQUIRE_SEED_DATA}" = "true" ]; then
+                  exit 1
+                fi
+                exit 0
+              fi
+
+              total_copied=0
+
+              # Copy per collection with progress
+              for collection in $(ls /source/downloaded_urls/); do
+                case "$collection" in
+                  ""|*[!a-z0-9_-]*)
+                    echo "Invalid collection directory name: $collection"
+                    exit 1
+                    ;;
+                esac
+                src="/source/downloaded_urls/$collection"
+                if [ ! -d "$src" ]; then
+                  continue
+                fi
+
+                file_count=$(find "$src" -type f | wc -l)
+                dir_size=$(du -sh "$src" | cut -f1)
+                echo ""
+                echo "--- Copying collection: $collection ($file_count files, $dir_size) ---"
+
+                destination="/destination/$collection"
+                mkdir -p "$destination"
+                if [ "${PRUNE_STAGED_DATA}" = "true" ]; then
+                  find "$destination" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+                fi
+                # `src/.` includes dotfiles while avoiding a network-installed
+                # rsync dependency during bootstrap.
+                # Do not preserve source ownership across the hostPath/NFS
+                # boundary; the non-root seed container cannot chown NFS files.
+                cp -R "$src/." "$destination/"
+                total_copied=$((total_copied + file_count))
+
+                echo "  $collection: done"
+              done
+
+              if [ "$total_copied" -eq 0 ] && [ "${REQUIRE_SEED_DATA}" = "true" ]; then
+                echo "No files were copied"
+                exit 1
+              fi
+
+              echo ""
+              echo "=== Copy complete. Total PVC usage: ==="
+              du -sh /destination/*/
+              du -sh /destination/
+
+              echo ""
+              echo "=== Seed complete ==="
+          volumeMounts:
+            - name: source
+              mountPath: /source
+              readOnly: true
+            - name: url-data
+              mountPath: /destination
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: source
+          hostPath:
+            path: /volume2/daedalus/datasets/daedalus-context/url-ingest
+            type: Directory
+        - name: url-data
+          persistentVolumeClaim:
+            claimName: url-ingest-data

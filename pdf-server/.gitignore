@@ -1,0 +1,29 @@
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.local
+
+# OS / editor
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs / scratch
+*.log
+*.tmp
+tmp/
+
+# Local PDF corpus and generated/browser data.
+# The PDF files are durable runtime data and are seeded into Kubernetes PVCs,
+# not committed to this repo.
+pdfs/
+processed_docs/
+nvidia/
+kubernetes/
+mentalhealth/
+semianalysis/
+*.pdf

@@ -1,0 +1,6 @@
+https://semianalysis.com/wp-sitemap-posts-post-1.xml
+https://semianalysis.com/wp-sitemap-posts-page-1.xml
+https://semianalysis.com/wp-sitemap-taxonomies-category-1.xml
+https://semianalysis.com/wp-sitemap-taxonomies-post_tag-1.xml
+https://semianalysis.com/wp-sitemap-taxonomies-core-research-tags-1.xml
+https://semianalysis.com/wp-sitemap-users-1.xml
