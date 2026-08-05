@@ -2,7 +2,7 @@ apiVersion: v2
 name: nemotron-retriever
 description: Serve NVIDIA Nemotron embedding and reranking models with vLLM.
 type: application
-version: 0.3.0
+version: 0.3.2
 appVersion: "0.17.0"
 kubeVersion: ">=1.25.0-0"
 home: https://huggingface.co/collections/nvidia/nemotron-rag

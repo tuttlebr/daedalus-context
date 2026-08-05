@@ -53,6 +53,29 @@ daedalus.ai/capability: retrieval
 {{- end -}}
 {{- end }}
 
+{{/* Fail closed when Cilium node forwarding is not paired with pre-SNAT filtering. */}}
+{{- define "nemotron-retriever.validateServiceExposure" -}}
+{{- $root := .root -}}
+{{- $server := .server -}}
+{{- $component := .component -}}
+{{- if $root.Values.networkPolicy.ciliumNodePort.enabled -}}
+{{- if eq $server.service.type "NodePort" -}}
+{{- fail (printf "%s.service.type=NodePort is unsafe with networkPolicy.ciliumNodePort.enabled=true; use LoadBalancer with loadBalancerSourceRanges so Cilium filters the original source before cross-node SNAT" $component) -}}
+{{- end -}}
+{{- if eq $server.service.type "LoadBalancer" -}}
+{{- if not $server.service.allocateLoadBalancerNodePorts -}}
+{{- fail (printf "%s.service.allocateLoadBalancerNodePorts must be true for Cilium node-address exposure" $component) -}}
+{{- end -}}
+{{- if not $server.service.loadBalancerSourceRanges -}}
+{{- fail (printf "%s.service.loadBalancerSourceRanges must contain at least one trusted source CIDR for Cilium node-address exposure" $component) -}}
+{{- end -}}
+{{- if ne (index $server.service.annotations "service.cilium.io/src-ranges-policy") "allow" -}}
+{{- fail (printf "%s.service.annotations must set service.cilium.io/src-ranges-policy=allow for Cilium node-address exposure" $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{/* Immutable selector labels for one model server. */}}
 {{- define "nemotron-retriever.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "nemotron-retriever.name" .root }}

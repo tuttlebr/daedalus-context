@@ -101,10 +101,15 @@ reranker:
   service:
     type: ClusterIP
     port: 8000
+    # Optionally pin the internal Service IP for cluster-specific deployments.
+    clusterIP: ""
     # Set when type is NodePort to reserve a specific port. Leave null to let
     # Kubernetes allocate one from the cluster's configured NodePort range.
     nodePort: null
     annotations: {}
+    loadBalancerClass: ""
+    allocateLoadBalancerNodePorts: true
+    loadBalancerSourceRanges: []
   resources:
     requests:
       cpu: "2"
@@ -160,10 +165,15 @@ embedder:
   service:
     type: ClusterIP
     port: 8000
+    # Optionally pin the internal Service IP for cluster-specific deployments.
+    clusterIP: ""
     # Set when type is NodePort to reserve a specific port. Leave null to let
     # Kubernetes allocate one from the cluster's configured NodePort range.
     nodePort: null
     annotations: {}
+    loadBalancerClass: ""
+    allocateLoadBalancerNodePorts: true
+    loadBalancerSourceRanges: []
   resources:
     requests:
       cpu: "2"
@@ -210,9 +220,22 @@ embedder:
 
 networkPolicy:
   enabled: true
+  # Namespace access applies to both endpoints. Set this to [] when access
+  # should come only from the component-specific CIDRs below.
   ingressNamespaces:
     - daedalus
     - nv-ingest
+  # Each endpoint has an independent CIDR allowlist. Empty lists do not add
+  # IP-based access; when all namespace and CIDR sources are empty, that
+  # endpoint's policy denies all ingress.
+  ingressCIDRs:
+    reranker: []
+    embedder: []
+  # Cilium identifies cross-node NodePort traffic as host/remote-node after
+  # source NAT. Enable this only when each externally exposed LoadBalancer
+  # Service filters the original client with loadBalancerSourceRanges.
+  ciliumNodePort:
+    enabled: false
 
 tests:
   enabled: true

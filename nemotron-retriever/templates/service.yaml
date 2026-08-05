@@ -1,6 +1,7 @@
 {{- range $component := list "reranker" "embedder" }}
 {{- $server := index $.Values $component }}
 {{- if $server.enabled }}
+{{- include "nemotron-retriever.validateServiceExposure" (dict "root" $ "server" $server "component" $component) }}
 ---
 apiVersion: v1
 kind: Service
@@ -16,13 +17,26 @@ metadata:
   {{- end }}
 spec:
   type: {{ $server.service.type }}
+  {{- with $server.service.clusterIP }}
+  clusterIP: {{ . | quote }}
+  {{- end }}
+  {{- if eq $server.service.type "LoadBalancer" }}
+  {{- with $server.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  allocateLoadBalancerNodePorts: {{ $server.service.allocateLoadBalancerNodePorts }}
+  {{- with $server.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   ports:
     - name: http
       port: {{ $server.service.port }}
       targetPort: {{ ternary "api" "vllm-http" $.Values.nimCompatibility.enabled }}
       protocol: TCP
       appProtocol: http
-      {{- if and (eq $server.service.type "NodePort") $server.service.nodePort }}
+      {{- if and (or (eq $server.service.type "NodePort") (eq $server.service.type "LoadBalancer")) $server.service.nodePort }}
       nodePort: {{ $server.service.nodePort }}
       {{- end }}
   selector:

@@ -42,7 +42,7 @@ RETRIEVER_FULLNAME ?= nemotron-retriever
 RETRIEVER_CHART ?= $(ROOT_DIR)/nemotron-retriever
 # Production-safe chart defaults are used unless the operator explicitly names
 # an override. NodePort examples are never auto-discovered.
-RETRIEVER_VALUES_FILE ?=
+RETRIEVER_VALUES_FILE ?= nemotron-retriever/custom-values.yaml
 RETRIEVER_ROLLOUT_TIMEOUT ?= 30m
 MILVUS_SERVICE ?= $(MILVUS_RELEASE)
 MINIO_SERVICE ?= $(MILVUS_RELEASE)-minio
@@ -341,7 +341,22 @@ deploy-retriever:
 	$(HELM) upgrade --install "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
 	  --namespace "$(RETRIEVER_NAMESPACE)" --create-namespace \
 	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" \
-	  "$${values_args[@]}" --wait --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"
+	  "$${values_args[@]}" --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
+	for deployment in "$(RETRIEVER_FULLNAME)-embedder" "$(RETRIEVER_FULLNAME)-reranker"; do \
+	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status "deployment/$$deployment" \
+	    --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
+	done; \
+	if $(KUBECTL) api-resources --api-group=cilium.io --output=name 2>/dev/null \
+	    | grep -Fxq 'ciliumnetworkpolicies.cilium.io'; then \
+	  mapfile -t cilium_policies < <($(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" \
+	    get ciliumnetworkpolicy \
+	    --selector="app.kubernetes.io/instance=$(RETRIEVER_RELEASE),daedalus.ai/capability=retrieval" \
+	    --output=name); \
+	  for policy in "$${cilium_policies[@]}"; do \
+	    $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" wait --for=condition=Valid "$$policy" \
+	      --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
+	  done; \
+	fi
 
 deploy-milvus:
 	@cd "$(ROOT_DIR)/nim-milvus-ms" && \

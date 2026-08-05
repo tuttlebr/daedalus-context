@@ -1,27 +1,72 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if $server.enabled }}
+{{- $ingressCIDRs := index $.Values.networkPolicy.ingressCIDRs $component }}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "nemotron-retriever.fullname" . }}-ingress
-  namespace: {{ include "nemotron-retriever.namespace" . }}
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" (printf "%s-ingress" $component)) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
   labels:
-    {{- include "nemotron-retriever.labels" . | nindent 4 }}
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
     app.kubernetes.io/component: network-policy
+    daedalus.ai/target-component: {{ $component }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "nemotron-retriever.name" . }}
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
   policyTypes:
     - Ingress
+  {{- if or $.Values.networkPolicy.ingressNamespaces $ingressCIDRs }}
   ingress:
     - from:
-        {{- range .Values.networkPolicy.ingressNamespaces }}
+        {{- range $.Values.networkPolicy.ingressNamespaces }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ . }}
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+        {{- range $ingressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.nimCompatibility.port }}
+          port: {{ ternary $.Values.nimCompatibility.port $server.port $.Values.nimCompatibility.enabled }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.networkPolicy.ciliumNodePort.enabled }}
+{{- range $component := list "reranker" "embedder" }}
+{{- $server := index $.Values $component }}
+{{- if and $server.enabled (eq $server.service.type "LoadBalancer") }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "nemotron-retriever.componentName" (dict "root" $ "component" (printf "%s-nodeport-ingress" $component)) }}
+  namespace: {{ include "nemotron-retriever.namespace" $ }}
+  labels:
+    {{- include "nemotron-retriever.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+    daedalus.ai/target-component: {{ $component }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "nemotron-retriever.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: {{ ternary $.Values.nimCompatibility.port $server.port $.Values.nimCompatibility.enabled | quote }}
+              protocol: TCP
+{{- end }}
+{{- end }}
 {{- end }}

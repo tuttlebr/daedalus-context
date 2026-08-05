@@ -19,7 +19,18 @@ validate: test
 
 deploy:
 	helm upgrade --install "$(RELEASE)" . --namespace "$(NAMESPACE)" \
-	  --create-namespace --wait --timeout "$(TIMEOUT)"
+	  --create-namespace --timeout "$(TIMEOUT)"
+	$(MAKE) wait-ready
+	@if kubectl api-resources --api-group=cilium.io --output=name 2>/dev/null \
+	    | grep -Fxq 'ciliumnetworkpolicies.cilium.io'; then \
+	  mapfile -t policies < <(kubectl --namespace="$(NAMESPACE)" get ciliumnetworkpolicy \
+	    --selector="app.kubernetes.io/instance=$(RELEASE),daedalus.ai/capability=retrieval" \
+	    --output=name); \
+	  for policy in "$${policies[@]}"; do \
+	    kubectl --namespace="$(NAMESPACE)" wait --for=condition=Valid "$$policy" \
+	      --timeout="$(TIMEOUT)"; \
+	  done; \
+	fi
 
 status:
 	helm status "$(RELEASE)" --namespace "$(NAMESPACE)"

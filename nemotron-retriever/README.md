@@ -7,7 +7,7 @@ This chart deploys two independent, GPU-backed vLLM servers:
 | `embedder` | `nvidia/llama-nemotron-embed-vl-1b-v2` | `POST /v1/embeddings` |
 | `reranker` | `nvidia/llama-nemotron-rerank-1b-v2` | native `POST /rerank`; NIM-compatible `POST /v1/ranking` |
 
-Both Services are `ClusterIP` by default and can independently be changed to `NodePort`. They expose the NVIDIA-compatible adapter on port 8000; the adapter forwards requests to the native vLLM servers and translates the reranker API. The chart pins `vllm/vllm-openai:v0.17.0`, the first vLLM release identified by NVIDIA as supporting the embedder architecture. The reranker receives NVIDIA's required query/document score template through a ConfigMap. Each deployment requests one NVIDIA GPU and has its own persistent Hugging Face model cache.
+Both Services are `ClusterIP` by default and can be exposed independently through a source-restricted node-address endpoint. They expose the NVIDIA-compatible adapter on port 8000; the adapter forwards requests to the native vLLM servers and translates the reranker API. The chart pins `vllm/vllm-openai:v0.17.0`, the first vLLM release identified by NVIDIA as supporting the embedder architecture. The reranker receives NVIDIA's required query/document score template through a ConfigMap. Each deployment requests one NVIDIA GPU and has its own persistent Hugging Face model cache.
 
 Review and accept the model repositories' NVIDIA Open Model License and referenced Llama terms before deployment; those model terms are separate from vLLM's software license.
 
@@ -133,7 +133,7 @@ curl --fail-with-body "$RERANKER_ENDPOINT" \
 
 The adapter returns a `rankings` array ordered by relevance. Each result includes the source document `index` and its `logit`; `top_n` limits the number of returned candidates.
 
-When using the example NodePorts from the configuration section instead of port forwarding, set the endpoints to `http://NODE_ADDRESS:30801/v1/embeddings` and `http://NODE_ADDRESS:30800/v1/ranking`, replacing `NODE_ADDRESS` with a reachable Kubernetes node address.
+When using the MetalLB endpoints from the configuration section instead of port forwarding, set the endpoints to `http://192.168.1.12:8000/v1/embeddings` and `http://192.168.1.13:8000/v1/ranking`.
 
 ## Configuration
 
@@ -168,26 +168,76 @@ multi-replica role, use independently mountable caches or a verified
 
 Both models require `--trust-remote-code`, which executes code downloaded with the model. Pin `revision` to a reviewed Hugging Face commit for production and restrict access to these internal Services to trusted workloads, particularly because multimodal requests can cause the embedder to fetch caller-supplied image URLs.
 
-To expose one or both Services on Kubernetes node addresses, set their type to `NodePort`. Leave `nodePort` unset to let Kubernetes allocate a port, or select distinct ports permitted by the cluster's NodePort range:
+### Cilium LAN exposure
+
+The repository's `custom-values.yaml` exposes both APIs through the local
+MetalLB `first-pool` while restricting the original client source to
+`192.168.1.0/24`. The embedder receives `192.168.1.12` and the reranker receives
+`192.168.1.13`. The fixed NodePorts remain available on each node as a secondary
+access path.
+
+Kubernetes only permits `loadBalancerSourceRanges` on `LoadBalancer` Services.
+Cilium must have `bpf.lbSourceRangeAllTypes=true` so those ranges are enforced
+on the allocated NodePorts. The relevant configuration is:
 
 ```yaml
 reranker:
   service:
-    type: NodePort
+    type: LoadBalancer
     port: 8000
-    nodePort: 30800
+    clusterIP: 10.106.42.103
+    nodePort: 30086
+    annotations:
+      service.cilium.io/src-ranges-policy: allow
+      metallb.io/address-pool: first-pool
+      metallb.io/loadBalancerIPs: 192.168.1.13
+    allocateLoadBalancerNodePorts: true
+    loadBalancerSourceRanges:
+      - 192.168.1.0/24
 
 embedder:
   service:
-    type: NodePort
+    type: LoadBalancer
     port: 8000
-    nodePort: 30801
+    clusterIP: 10.105.200.146
+    nodePort: 30085
+    annotations:
+      service.cilium.io/src-ranges-policy: allow
+      metallb.io/address-pool: first-pool
+      metallb.io/loadBalancerIPs: 192.168.1.12
+    allocateLoadBalancerNodePorts: true
+    loadBalancerSourceRanges:
+      - 192.168.1.0/24
+
+networkPolicy:
+  ciliumNodePort:
+    enabled: true
+  ingressCIDRs:
+    reranker:
+      - 192.168.1.0/24
+    embedder:
+      - 192.168.1.0/24
 ```
 
-NodePort retains the in-cluster ClusterIP endpoints while additionally exposing each Service as `<node-address>:<nodePort>`. Apply appropriate firewall and network-policy controls before exposing the unauthenticated vLLM APIs.
+The Service source ranges apply before cross-node source NAT. The supplemental
+`CiliumNetworkPolicy` then permits the `host` and `remote-node` identities that
+Cilium presents to the destination pod after forwarding. The ordinary
+`NetworkPolicy` continues to allow the configured namespaces and direct CIDR
+sources. These two controls are intentionally paired: allowing `remote-node`
+without pre-NAT Service filtering would make the unauthenticated APIs reachable
+from every source that can reach a node address.
 
-The repository includes `values-nodeport.example.yaml` as an explicit local
-diagnostic overlay. The root Makefile never auto-applies it.
+The chart renders a separate ingress policy for each endpoint. The CIDR lists
+above are independent, so the embedder and reranker can be exposed to different
+source networks. `networkPolicy.ingressNamespaces` continues to allow the
+listed namespaces to reach both endpoints; set it to `[]` for CIDR-only access.
+An endpoint with no namespace or CIDR sources denies all ingress. CIDR matching
+uses the source address observed by the cluster network plugin, which can differ
+from the client address when NodePort traffic is source-NATed.
+
+The root Makefile applies `nemotron-retriever/custom-values.yaml` by default.
+Override `RETRIEVER_VALUES_FILE=` to retain the chart's internal-only
+`ClusterIP` defaults.
 
 For more than one replica, the chart fails closed unless the update strategy is
 `RollingUpdate` and the cache is disabled or explicitly marked
