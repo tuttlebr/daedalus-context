@@ -45,6 +45,9 @@ class ChartRenderTests(unittest.TestCase):
         services = [resource for resource in resources if resource["kind"] == "Service"]
         self.assertEqual(len(services), 2)
         self.assertTrue(all(service["spec"]["type"] == "ClusterIP" for service in services))
+        self.assertTrue(
+            all("externalTrafficPolicy" not in service["spec"] for service in services)
+        )
         self.assertFalse(
             any(resource["kind"] == "CiliumNetworkPolicy" for resource in resources)
         )
@@ -118,7 +121,7 @@ class ChartRenderTests(unittest.TestCase):
                 [expected_cidr],
             )
 
-    def test_cilium_lan_exposure_filters_before_snat_and_allows_node_forwarding(self):
+    def test_cilium_lan_exposure_preserves_source_with_local_traffic_policy(self):
         result = helm_template(
             "--values",
             str(CHART_DIR / "custom-values.yaml"),
@@ -136,6 +139,7 @@ class ChartRenderTests(unittest.TestCase):
         for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
             service = services[component]
             self.assertEqual(service["spec"]["type"], "LoadBalancer")
+            self.assertEqual(service["spec"]["externalTrafficPolicy"], "Local")
             self.assertEqual(
                 service["spec"]["clusterIP"],
                 {
@@ -166,22 +170,9 @@ class ChartRenderTests(unittest.TestCase):
                 ],
             )
 
-        cilium_policies = {
-            resource["metadata"]["labels"]["daedalus.ai/target-component"]: resource
-            for resource in resources
-            if resource["kind"] == "CiliumNetworkPolicy"
-        }
-        self.assertEqual(set(cilium_policies), {"embedder", "reranker"})
-        for component, policy in cilium_policies.items():
-            self.assertEqual(
-                policy["spec"]["endpointSelector"]["matchLabels"][
-                    "app.kubernetes.io/component"
-                ],
-                component,
-            )
-            ingress = policy["spec"]["ingress"]
-            self.assertEqual(ingress[0]["fromEntities"], ["host", "remote-node"])
-            self.assertEqual(ingress[0]["toPorts"][0]["ports"][0]["port"], "8080")
+        self.assertFalse(
+            any(resource["kind"] == "CiliumNetworkPolicy" for resource in resources)
+        )
 
     def test_cilium_node_forwarding_rejects_plain_nodeport(self):
         result = helm_template(

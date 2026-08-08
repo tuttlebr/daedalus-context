@@ -108,6 +108,7 @@
           "required": [
             "type",
             "port",
+            "externalTrafficPolicy",
             "annotations",
             "loadBalancerClass",
             "allocateLoadBalancerNodePorts",
@@ -119,6 +120,10 @@
               "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
             },
             "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "externalTrafficPolicy": {
+              "type": "string",
+              "enum": ["Cluster", "Local"]
+            },
             "clusterIP": { "type": "string" },
             "nodePort": {
               "type": ["integer", "null"],

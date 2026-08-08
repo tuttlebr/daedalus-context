@@ -101,6 +101,9 @@ reranker:
   service:
     type: ClusterIP
     port: 8000
+    # Used only for NodePort and LoadBalancer Services. Local preserves the
+    # original client address by restricting external traffic to local pods.
+    externalTrafficPolicy: Cluster
     # Optionally pin the internal Service IP for cluster-specific deployments.
     clusterIP: ""
     # Set when type is NodePort to reserve a specific port. Leave null to let
@@ -165,6 +168,9 @@ embedder:
   service:
     type: ClusterIP
     port: 8000
+    # Used only for NodePort and LoadBalancer Services. Local preserves the
+    # original client address by restricting external traffic to local pods.
+    externalTrafficPolicy: Cluster
     # Optionally pin the internal Service IP for cluster-specific deployments.
     clusterIP: ""
     # Set when type is NodePort to reserve a specific port. Leave null to let

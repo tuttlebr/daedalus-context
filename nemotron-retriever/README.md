@@ -173,8 +173,11 @@ Both models require `--trust-remote-code`, which executes code downloaded with t
 The repository's `custom-values.yaml` exposes both APIs through the local
 MetalLB `first-pool` while restricting the original client source to
 `192.168.1.0/24`. The embedder receives `192.168.1.12` and the reranker receives
-`192.168.1.13`. The fixed NodePorts remain available on each node as a secondary
-access path.
+`192.168.1.13`. Both Services use `externalTrafficPolicy: Local`, so MetalLB
+announces each address from a node with a local ready endpoint and Cilium keeps
+the original client address for the ingress CIDR policy. The fixed NodePorts
+remain available on nodes with a local ready endpoint as a secondary access
+path.
 
 Kubernetes only permits `loadBalancerSourceRanges` on `LoadBalancer` Services.
 Cilium must have `bpf.lbSourceRangeAllTypes=true` so those ranges are enforced
@@ -185,6 +188,7 @@ reranker:
   service:
     type: LoadBalancer
     port: 8000
+    externalTrafficPolicy: Local
     clusterIP: 10.106.42.103
     nodePort: 30086
     annotations:
@@ -199,6 +203,7 @@ embedder:
   service:
     type: LoadBalancer
     port: 8000
+    externalTrafficPolicy: Local
     clusterIP: 10.105.200.146
     nodePort: 30085
     annotations:
@@ -211,7 +216,7 @@ embedder:
 
 networkPolicy:
   ciliumNodePort:
-    enabled: true
+    enabled: false
   ingressCIDRs:
     reranker:
       - 192.168.1.0/24
@@ -219,13 +224,12 @@ networkPolicy:
       - 192.168.1.0/24
 ```
 
-The Service source ranges apply before cross-node source NAT. The supplemental
-`CiliumNetworkPolicy` then permits the `host` and `remote-node` identities that
-Cilium presents to the destination pod after forwarding. The ordinary
-`NetworkPolicy` continues to allow the configured namespaces and direct CIDR
-sources. These two controls are intentionally paired: allowing `remote-node`
-without pre-NAT Service filtering would make the unauthenticated APIs reachable
-from every source that can reach a node address.
+The Service source ranges filter the original client before endpoint selection.
+Local external traffic then reaches only a same-node endpoint without source
+NAT, allowing the ordinary `NetworkPolicy` to match the same client CIDR. The
+supplemental node-forwarding `CiliumNetworkPolicy` is disabled for this profile
+because cross-node forwarding would replace the client address before endpoint
+policy evaluation.
 
 The chart renders a separate ingress policy for each endpoint. The CIDR lists
 above are independent, so the embedder and reranker can be exposed to different

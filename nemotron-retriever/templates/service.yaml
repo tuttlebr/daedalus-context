@@ -17,6 +17,9 @@ metadata:
   {{- end }}
 spec:
   type: {{ $server.service.type }}
+  {{- if or (eq $server.service.type "NodePort") (eq $server.service.type "LoadBalancer") }}
+  externalTrafficPolicy: {{ $server.service.externalTrafficPolicy }}
+  {{- end }}
   {{- with $server.service.clusterIP }}
   clusterIP: {{ . | quote }}
   {{- end }}

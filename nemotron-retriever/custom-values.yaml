@@ -2,7 +2,7 @@
 # that should be permitted to reach each endpoint.
 networkPolicy:
   ciliumNodePort:
-    enabled: true
+    enabled: false
   ingressCIDRs:
     embedder:
       - 192.168.1.0/24
@@ -13,6 +13,7 @@ embedder:
   service:
     type: LoadBalancer
     port: 8000
+    externalTrafficPolicy: Local
     clusterIP: 10.105.200.146
     nodePort: 30085
     annotations:
@@ -27,6 +28,7 @@ reranker:
   service:
     type: LoadBalancer
     port: 8000
+    externalTrafficPolicy: Local
     clusterIP: 10.106.42.103
     nodePort: 30086
     annotations:
