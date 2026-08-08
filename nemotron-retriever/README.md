@@ -135,6 +135,15 @@ The adapter returns a `rankings` array ordered by relevance. Each result include
 
 When using the MetalLB endpoints from the configuration section instead of port forwarding, set the endpoints to `http://192.168.1.12:8000/v1/embeddings` and `http://192.168.1.13:8000/v1/ranking`.
 
+Run the standalone embedder smoke test against the default MetalLB endpoint:
+
+```bash
+./nemotron-retriever/smoke-test.sh
+```
+
+Set `EMBED_BASE_URL`, `EMBED_MODEL`, `EMBED_API_KEY`, or
+`EMBED_TIMEOUT_SECONDS` to override its defaults.
+
 ## Configuration
 
 Common production overrides include:
