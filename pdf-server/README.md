@@ -6,22 +6,19 @@ and publication Job. URL ingest consumes the `pdf-server-data` claim and
 `pdf-server` Service when deployed in the same namespace; it does not reconcile
 them.
 
-Local browsing uses the versioned private PDF server image and mounts each
-collection read-only:
+The workspace root owns the image release and Kubernetes deployment paths:
 
 ```bash
-# From this component directory; deploy.sh uses the root Compose project.
-./deploy.sh
-
-# Or from the workspace root:
-make compose-up
+cd ..
+make images-build
+COMPONENTS=pdf-server make deploy
 ```
 
-The root Compose build wraps the versioned `nginx:1.27.4-alpine` base as
+The root image specification wraps the versioned `nginx:1.27.4-alpine` base as
 `daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0`. The same SemVer-tagged
 `PDF_SERVER_IMAGE` is used by the Kubernetes deployment.
 
-Deploy two Kubernetes replicas behind a ClusterIP:
+Use the component wrapper only for focused debugging or recovery:
 
 ```bash
 TARGET=kubernetes NAMESPACE=milvus ./deploy.sh

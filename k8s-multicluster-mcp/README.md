@@ -101,47 +101,18 @@ CGO_ENABLED=0 go build -ldflags="-w -s" -o k8s-mcp-server main.go
 ./k8s-mcp-server --mode sse --port 9090 --read-only --no-helm
 ```
 
-### Docker
+### Container Image
 
 ```bash
-# Build
-docker compose -f ../docker-compose.yaml build k8s-mcp-server-read-only
+# Build all locally maintained workspace images
+make -C .. images-build
 
-# Push and print the versioned deployment reference
-docker compose -f ../docker-compose.yaml push k8s-mcp-server-read-only
-make -C .. compose-release-refs
-
-# Run with local kubeconfig in safe read-only HTTP mode
-export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
-docker run -p 8080:8080 \
-  -e SERVER_MODE=streamable-http \
-  -e SERVER_READ_ONLY=true \
-  -e MCP_REQUIRE_AUTH=true \
-  -e MCP_AUTH_TOKEN="$MCP_AUTH_TOKEN" \
-  -e KUBECONFIG=/home/appuser/.kube/config \
-  -v ~/.kube/config:/home/appuser/.kube/config:ro \
-  daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0
+# Push and print the versioned deployment references
+make -C .. images-publish
 ```
 
-### Docker Compose
-
-```yaml
-services:
-  k8s-mcp-server:
-    build: ./src
-    ports:
-      - "8080:8080"
-    volumes:
-      - ~/.kube:/home/appuser/.kube:ro
-    environment:
-      KUBECONFIG: /home/appuser/.kube/config
-      SERVER_MODE: streamable-http
-      SERVER_PORT: "8080"
-      SERVER_READ_ONLY: "true"
-      MCP_REQUIRE_AUTH: "true"
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?set MCP_AUTH_TOKEN before starting}
-    restart: unless-stopped
-```
+The workspace Compose file is an image specification. Deploy the published
+image through the guarded root Kubernetes workflow described below.
 
 ## Configuration
 
@@ -287,15 +258,15 @@ kubectl -n k8s-mcp-server create secret generic k8s-mcp-agent-config \
 
 The deployment manifest references this Secret with `optional: true`, so the server works fine without it — the `devopsAgent` tool simply won't be registered.
 
-### Docker Compose
+### Workspace Image and Deployment
 
-Set the env vars in your shell before running, or add them to a `.env` file:
+The workspace Compose file is an image specification, not a local deployment
+path. Build the image from the workspace root, then deploy through the guarded
+root Kubernetes workflow:
 
 ```bash
-export OPENCODE_BASE_URL="http://llm.local:8080/v1"
-export OPENCODE_API_KEY="sk-your-api-key"
-export OPENCODE_MODEL="private-llm/llama-3.1-70b"
-make -C .. compose-up
+make -C .. images-build
+COMPONENTS=k8s-mcp make -C .. deploy
 ```
 
 ### Tool Parameters
@@ -361,15 +332,12 @@ The `name` must match its parent directory name exactly and follow the pattern `
 
 ### How Skills Are Loaded
 
-**Docker / Kubernetes:** The standard image bakes the curated skill set under `src/skills/` into `/home/appuser/.config/opencode/skills/` during build. The set is audited, scoped to the DevOps-engineer role, and ships with the runtime tools each skill assumes (see [Bundled Skill Set](#bundled-skill-set)). To replace or extend the baked set without rebuilding, mount over the same container path at runtime.
-
-**Runtime mount (no rebuild required):** Override or supplement the bundled skills by volume-mounting on top of the container path:
-
-```yaml
-# ../docker-compose.yaml
-volumes:
-  - ./my-skills:/home/appuser/.config/opencode/skills:ro
-```
+**Container image / Kubernetes:** The standard image bakes the curated skill
+set under `src/skills/` into `/home/appuser/.config/opencode/skills/` during
+build. The set is audited, scoped to the DevOps-engineer role, and ships with
+the runtime tools each skill assumes (see
+[Bundled Skill Set](#bundled-skill-set)). Extend it through a reviewed image
+release or Kubernetes volume configuration.
 
 **Local development (without Docker):** Place skills in the global opencode config directory:
 
@@ -621,7 +589,7 @@ For write operations, create a separate ClusterRole with the necessary verbs and
 │   ├── tools/               # MCP tool schema definitions
 │   ├── handlers/            # Tool request handlers
 │   └── pkg/                 # Client libraries (k8s, helm, agent)
-├── ../docker-compose.yaml   # Unified workspace local development
+├── ../docker-compose.yaml   # Workspace image build specification
 ├── Makefile                 # Build, test, lint, format, deploy
 ├── deploy.sh                # Build + deploy script
 └── redeploy.sh              # Backward-compatible wrapper for deploy.sh
@@ -659,9 +627,9 @@ The hardening pass was verified with:
 
 - `make test`
 - `make check`
-- `docker compose -f ../docker-compose.yaml config`
+- `make -C .. images-validate`
 - `kubectl apply --dry-run=client -f deploy/k8s-mcp-server.yaml`
-- `docker compose -f ../docker-compose.yaml build k8s-mcp-server-read-only`
+- `make -C .. images-build`
 
 Test coverage was added for auth environment parsing, HTTP auth decisions, recursive output sanitization, safe handler marshaling, and agent capability-gate propagation.
 

@@ -1,175 +1,242 @@
 # Daedalus Context Operations
 
-This workspace deploys the seven support services used by
-[daedalus-agent](https://github.com/tuttlebr/daedalus-agent). Use the root
-`Makefile` for normal Kubernetes operations. It applies the shared deployment
-contract, preserves the existing namespace and PVC boundaries, and coordinates
-dependencies without turning an optional service into a stack-wide failure.
+This repository builds and operates the Kubernetes services that provide
+retrieval, ingestion, and infrastructure tools to
+[daedalus-agent](https://github.com/tuttlebr/daedalus-agent).
+
+Kubernetes is the only supported deployment runtime. Use the root `Makefile`
+for deployment, updates, health checks, and data operations. The root
+`docker-compose.yaml` is an image specification used to validate, build, and
+publish the five locally maintained images. It is not a second deployment
+path.
+
+## Start Here
+
+Run commands from the repository root. The normal first deployment is:
+
+```bash
+cd /volume2/daedalus/datasets/daedalus-context
+
+test -e .env || cp .env.example .env
+${EDITOR:-vi} .env
+
+set -a
+source .env
+set +a
+
+export ENVIRONMENT=production
+export EXPECTED_CONTEXT=kubernetes-admin@kubernetes
+
+make doctor
+make show-config
+make validate-cluster
+make deploy
+make health-provider
+```
+
+Replace the example context with the approved literal context for the target
+cluster. Do not populate `EXPECTED_CONTEXT` by reading the current context in
+the same command. That would defeat the wrong-cluster guard.
+
+After the providers are ready:
+
+```bash
+# Existing cluster: prove that persisted collections are still healthy.
+make health-dependencies
+
+# Fresh cluster only: publish, ingest, wait, and verify all required data.
+make seed-data CORPUS_GENERATION=release-2026-08-09
+```
+
+Do not seed an existing cluster merely because services were redeployed.
+
+Render the Daedalus consumer configuration, deploy Daedalus from its own
+repository, and then verify the complete path:
+
+```bash
+make render-agent-env
+make health-stack
+```
+
+`make help` is the command index. Every target includes a side-effect label.
+
+## Choose a Task
+
+| Goal | Command | Effect |
+| --- | --- | --- |
+| Check workstation, configuration, context, and cluster access | `make doctor` | Read-only cluster access |
+| Inspect effective non-secret settings | `make show-config` | Read-only local output |
+| Validate the image specification | `make images-validate` | Read-only local validation |
+| Build the five local images | `make images-build` | Writes local image state |
+| Build and publish a versioned image release | `make images-publish` | Writes local image and remote registry state |
+| Run source tests and renders | `make validate-local` | Read-only validation plus disposable build output |
+| Validate manifests and cluster capacity | `make validate-cluster` | Read-only cluster access and client dry-runs |
+| Reconcile all selected services | `make deploy` | Writes Kubernetes resources |
+| Reconcile an already-published update | `make update` | Writes Kubernetes resources |
+| Restart selected long-running workloads | `make redeploy` | Restarts pods; does not delete PVCs |
+| Check provider workloads | `make health-provider` | Read-only cluster access |
+| Check dependencies and data freshness | `make health-dependencies` | Read-only cluster access |
+| Probe providers from Daedalus | `make health-integration` | Read-only cluster access |
+| Publish or ingest data | `make seed-data` or `make run-ingest` | Writes corpus, Jobs, and collection data |
+
+Every command that reads or writes Kubernetes requires `EXPECTED_CONTEXT` and
+refuses to continue when it does not match the active context.
 
 ## Stack Model
 
-| Component | Owner | Namespace | Role |
+The dependency graph is declared in `stack/topology.yaml`.
+
+| Component | Owning directory | Namespace | Role |
 | --- | --- | --- | --- |
 | `milvus` | `nim-milvus-ms/` | `milvus` | Vector database and MinIO object storage |
 | `retriever` | `nemotron-retriever/` | `daedalus-retriever` | Embedding and optional reranking inference |
 | `nv-ingest` | `nv-ingest/` | `nv-ingest` | Document extraction, chunking, and storage |
 | `pdf-server` | `pdf-server/` | `milvus` | Versioned, read-only source PDF corpus |
-| `url-ingest` | `url-ingest/` | `milvus` | Scheduled and manual shared-collection population |
+| `url-ingest` | `url-ingest/` | `milvus` | Scheduled and manual collection population |
 | `k8s-mcp` | `k8s-multicluster-mcp/` | `k8s-mcp-server` | Authenticated Kubernetes operations tools |
 | `unifi-mcp` | `unifi-network-mcp/` | `unifi-network-mcp-server` | Authenticated, read-only UniFi tools |
 
-The deployment graph is declared in `stack/topology.yaml`:
-
 ```text
-milvus ─────┐
-            ├──> nv-ingest ──┐
-retriever ──┘                 │
-                              ├──> url-ingest
-pdf-server ───────────────────┘
+milvus -----+
+             +--> nv-ingest --+
+retriever --+                 |
+                               +--> url-ingest
+pdf-server -------------------+
 
 k8s-mcp    (independent)
 unifi-mcp  (independent)
 ```
 
-The orchestrator deploys independent roots concurrently, then deploys
-`nv-ingest` and `url-ingest` when their selected dependencies succeed. A failed
-component blocks only its dependents; unrelated branches continue and the final
-JSON report identifies every succeeded, failed, or blocked component.
+The root orchestrator deploys independent roots concurrently. It starts a
+dependent component only after its selected dependencies succeed. A failed
+component blocks only its dependents. The final JSON report identifies every
+`succeeded`, `failed`, and `blockedBy` component.
 
-This separation is also the runtime failure policy:
+The runtime failure policy follows the same boundaries:
 
-- Core chat does not require context services.
-- Existing document search depends on Milvus and embedding inference, not on
-  the ingestion scheduler.
+- Core chat does not require this repository's services.
+- Existing document search requires Milvus and embedding inference. It does
+  not require the ingestion scheduler.
 - Reranking is optional and fails open.
-- A failed NV-Ingest or URL refresh affects new content, not already indexed
-  content.
-- Kubernetes and UniFi MCP failures do not take retrieval or core chat down.
+- Failed ingestion affects new content, not already indexed content.
+- Kubernetes and UniFi MCP failures do not take retrieval down.
 
-## Unified Local Docker Compose
+## Configuration
 
-The root `docker-compose.yaml` is the only Compose specification. It contains
-the locally supported Kubernetes MCP, UniFi MCP, PDF server, URL crawler, and
-NV-Ingest task containers. Component directories remain their build contexts
-and data-mount owners; they no longer contain independent Compose files.
+The root `.env` is the shared configuration file. It is ignored by Git.
+Component wrappers load the root file and then an optional component-local
+`.env`. Explicit caller values take final precedence.
 
-Start the three long-running local serving containers:
-
-```bash
-make compose-up
-```
-
-The default host ports are PDF `8080`, Kubernetes MCP `8081`, and UniFi MCP
-`8082`. Override them in the untracked root `.env`. The Make targets flatten
-the active kubeconfig into a mode-0700 per-user runtime directory under `/tmp`
-with group-only file access for the container; they do not change the
-permissions of the source kubeconfig. Set `KUBECONFIG_SOURCE` to use a file
-other than `$KUBECONFIG` or `~/.kube/config`.
-
-All five Compose images use
-`daedalus.ddns.me:5050/btuttle/<service>:0.1.0` by default. Set
-`DAEDALUS_CONTEXT_IMAGE_VERSION` in `.env` when publishing a new workspace
-release:
+GNU Make does not load `.env` automatically. Export it before cluster
+operations:
 
 ```bash
-make compose-publish
+set -a
+source .env
+set +a
 ```
 
-`compose-publish` builds and pushes Kubernetes MCP, UniFi MCP, PDF server, URL
-crawler, and the NV-Ingest task runner. Its final output contains
-`K8S_MCP_IMAGE`, `UNIFI_MCP_IMAGE`, `PDF_SERVER_IMAGE`, `URL_INGEST_IMAGE`, and
-`URL_INGEST_RUNNER_IMAGE` as SemVer-tagged assignments. Use
-`make compose-release-refs` to print the configured deployment references
-without rebuilding.
+`make doctor` checks that the file exists, parses as shell syntax, and has been
+exported to Make. It never prints secret values.
 
-The crawler and NV-Ingest task runner are batch/data-mutating services behind
-the `ingest` profile. Run them explicitly:
-
-```bash
-make compose-crawl
-make compose-ingest
-```
-
-`make compose-config` validates all five service specifications, including the
-profiled jobs. The Compose project is a local workflow for the containers that
-already supported Compose; it does not emulate the Kubernetes-only Milvus,
-retriever, or distributed NV-Ingest control planes.
-
-## Deployment Rules
-
-- Run routine deploys from this workspace root. Child `deploy.sh` scripts are
-  implementation details and scoped recovery tools, not an alternative
-  seven-step deployment order.
-- Build and publish images before deployment. `make deploy` and `make update`
-  reconcile explicit SemVer-tagged releases; they do not silently build or
-  push images. Published version tags must not be overwritten.
-- Keep the existing independent namespaces. Do not set `STACK_NAMESPACE` for a
-  routine deployment: changing namespace placement does not migrate PVC data,
-  Secrets, or collections.
-- Keep data mutations separate. Deploying services never publishes a corpus or
-  launches ingestion Jobs.
-- Set `EXPECTED_CONTEXT` to the approved literal kubectl context for every
-  cluster operation. Do not derive it from the current context in the same
-  command, because that defeats the guard.
-- Never commit `.env`, kubeconfigs, tokens, TLS keys, API keys, or model data.
-
-## Prerequisites
-
-The operator needs:
-
-- `bash`, GNU Make, Python 3, `jq`, `kubectl`, Helm, and Docker;
-- access to the intended Kubernetes cluster and container registries;
-- NGC/NVCR and Hugging Face credentials required by the pinned releases;
-- `nvcr-imagepullsecret` in the source namespace used by the deployment
-  wrappers;
-- a reviewed storage class for MinIO bulk data; and
-- NVIDIA GPU/operator capacity for the retriever and NV-Ingest workloads.
-
-`make validate-cluster` performs read-only capacity and manifest checks. It
-does not replace review of storage failure domains, backup policy, or the
-production acceptance criteria in `stack/environments/production.yaml`.
-
-## First Aligned Deployment
-
-### 1. Configure the release
-
-Start at the workspace root and create the untracked environment file:
-
-```bash
-cd /volume2/daedalus/datasets/daedalus-context
-test -e .env || cp .env.example .env
-${EDITOR:-vi} .env
-```
-
-At minimum, replace every example or empty production value for:
+Review at least these settings before deployment:
 
 | Area | Required configuration |
 | --- | --- |
-| Storage | `MINIO_STORAGE_CLASS` and a supported shared `IMAGE_STORAGE_URI` |
-| Provider images | `DAEDALUS_CONTEXT_IMAGE_VERSION` and the five derived provider image references, using an already-published SemVer tag |
-| Provider auth | Distinct `K8S_MCP_AUTH_TOKEN` and `UNIFI_MCP_AUTH_TOKEN`; leave the corresponding `*_NEXT` value empty until rotation |
-| External MCP access | Stable authenticated NodePorts `30080` and `30081`, restricted by `MCP_EXTERNAL_CLIENT_CIDR` (default `192.168.1.0/24`) |
-| UniFi | `UNIFI_BASE_URL`, exact `UNIFI_CONTROLLER_CIDR`, `UNIFI_API_KEY`, and TLS verification policy |
-| NVIDIA/model access | `NGC_API_KEY`, `NVIDIA_API_KEY`, and `HF_ACCESS_TOKEN` as required |
-| Stateful credentials | Strong MinIO and Milvus credentials, or pre-provisioned authoritative Kubernetes Secrets |
-| Ingestion | Source paths/node, required collections, bucket, and job timing appropriate for the cluster |
+| Images | Published SemVer image references and `DAEDALUS_CONTEXT_IMAGE_VERSION` |
+| Context | Exact `EXPECTED_CONTEXT` supplied outside `.env` or through the operator environment |
+| Storage | Reviewed `MINIO_STORAGE_CLASS`, `ETCD_STORAGE_CLASS`, and `IMAGE_STORAGE_URI` |
+| Provider auth | Distinct Kubernetes MCP and UniFi MCP current tokens |
+| External MCP access | Stable NodePorts and `MCP_EXTERNAL_CLIENT_CIDR` |
+| UniFi | Controller URL, exact controller CIDR, API key, and TLS policy |
+| NVIDIA and models | Required NGC, NVIDIA API, and Hugging Face credentials |
+| Stateful credentials | Strong MinIO and Milvus credentials or authoritative Secrets |
+| Ingestion | Source paths, source node, collections, bucket, and job limits |
 
-Each child wrapper reads the root `.env` and then its own `.env`, if present.
-Explicit exported values take final precedence. Prefer the root file for shared
-settings and use a child file only for an intentional component-specific
-override.
+Keep the existing independent namespaces. `STACK_NAMESPACE` is only for a
+reviewed namespace migration. It does not move PVC data, Secrets, or Milvus
+collections.
 
-The NodePort allow-list requires Cilium to have
-`bpf.lbSourceRangeAllTypes=true`. Both MCP deployment wrappers fail closed when
-that setting is absent so `loadBalancerSourceRanges` cannot appear configured
-while remaining unenforced. Enable it with the exact installed Cilium chart
-version before the first MCP deployment:
+Never commit `.env`, kubeconfigs, tokens, keys, credentials, or model data.
+
+## Image Lifecycle
+
+The root `docker-compose.yaml` defines build contexts and versioned image names
+for:
+
+- Kubernetes MCP;
+- UniFi MCP;
+- PDF server;
+- URL crawler; and
+- the URL-ingest NV-Ingest task runner.
+
+It does not build the Kubernetes-only Milvus, retriever, or distributed
+NV-Ingest control planes.
+
+Validate and build images without Kubernetes access:
+
+```bash
+make images-validate
+make images-build
+```
+
+Publish a new workspace release only after selecting a new immutable SemVer
+tag in `.env`:
+
+```bash
+make images-publish
+```
+
+This builds and pushes all five images. Its final output contains the
+`K8S_MCP_IMAGE`, `UNIFI_MCP_IMAGE`, `PDF_SERVER_IMAGE`, `URL_INGEST_IMAGE`, and
+`URL_INGEST_RUNNER_IMAGE` assignments used by Kubernetes deployment.
+
+Print the assignments without rebuilding or pushing:
+
+```bash
+make images-release-refs
+```
+
+Published version tags must not be overwritten. `make deploy` and
+`make update` never build or push images.
+
+## Release and Cluster Gates
+
+`stack/components.lock.yaml` is the release inventory. Before a rollout:
+
+1. Replace pending source revisions with reviewed commits.
+2. Publish the selected local image release.
+3. Record reviewed versions for upstream images and model artifacts.
+4. Keep the retriever revisions and serving contracts aligned with
+   `stack/rag-schema.yaml`.
+5. Record the approved storage and acceptance decisions in the selected
+   environment file.
+
+Run contract validation:
+
+```bash
+scripts/contextctl validate --environment "$ENVIRONMENT"
+```
+
+`Contract validation passed` means the YAML contracts agree. It is not release
+approval when a following line begins with `BLOCKED:`.
+
+The checked-in production environment permits personal, single-user non-HA
+operation with recorded accepted risks. `make validate-ha` intentionally
+rejects that policy. Shared production HA requires approved numeric node-loss,
+failover, RPO, and RTO criteria.
+
+### External MCP Network Prerequisite
+
+The fixed MCP NodePorts use `loadBalancerSourceRanges`. Cilium must enforce
+source ranges for all load balancer types:
 
 ```bash
 CILIUM_VERSION="$(
   helm list -n kube-system --filter '^cilium$' -o json |
     jq -r '.[0].chart | sub("^cilium-"; "")'
 )"
+
 helm upgrade cilium cilium/cilium \
   --namespace kube-system \
   --version "${CILIUM_VERSION}" \
@@ -178,290 +245,148 @@ helm upgrade cilium cilium/cilium \
   --atomic --wait
 ```
 
-Kubernetes permits `loadBalancerSourceRanges` only on a Service whose type is
-`LoadBalancer`. The two MCP Services therefore use the intentionally unclaimed
-class `daedalus.ai/nodeport-only` with NodePort allocation enabled. MetalLB does
-not allocate or advertise an address for that class; external clients still use
-the fixed node-address endpoints on `30080` and `30081`.
+Use the exact installed Cilium version. The MCP wrappers fail closed when this
+setting is absent. Their intentionally unclaimed load balancer class prevents
+MetalLB from advertising an address while retaining fixed, CIDR-restricted
+NodePorts.
 
-The root Makefile also evaluates settings such as `MINIO_STORAGE_CLASS` before
-it invokes a child wrapper. Export the root file into the operator shell before
-using Make:
+## Deploy and Update
 
-```bash
-set -a
-source .env
-set +a
-
-export ENVIRONMENT=production
-export EXPECTED_CONTEXT=kubernetes-admin@kubernetes
-```
-
-Replace the example context with the approved context for the target cluster.
-
-### 2. Resolve versioned release and ownership gates
-
-`stack/components.lock.yaml` is the release inventory. Before a production
-rollout:
-
-1. Replace every pending `sourceRevision` with the reviewed source commit.
-2. Build and publish the Kubernetes MCP, UniFi MCP, and URL-ingest runner
-   images with the selected `DAEDALUS_CONTEXT_IMAGE_VERSION`.
-3. Record the reviewed SemVer versions for Milvus, NV-Ingest, and retriever
-   images in the release inventory.
-4. Keep the already pinned retriever models, model revisions, configuration
-   hashes, and serving contracts aligned with `stack/rag-schema.yaml`.
-5. Record the approved MinIO and document-artifact storage decisions in
-   `stack/environments/production.yaml`.
-
-Run the contract validator:
+All seven components are selected by default:
 
 ```bash
-scripts/contextctl validate --environment "$ENVIRONMENT"
+make validate-cluster
+make deploy
+make health-provider
 ```
 
-`Contract validation passed` means the YAML contracts agree with one another.
-It is not release approval if any following line begins with `BLOCKED:`. Treat
-pending source revisions as a production release blocker.
+Deployment is idempotent. It does not restart unchanged workloads, publish a
+corpus, or launch ingestion Jobs.
 
-Production HA qualification is a separate, explicit gate:
-
-```bash
-make validate-ha ENVIRONMENT="$ENVIRONMENT"
-```
-
-For a shared production service, this intentionally fails until owners approve
-numeric node-loss, failover, RPO, and RTO objectives and resolve the storage
-decisions. An availability rollout under a phased HA plan is reported as
-`redundancy: at-risk`.
-
-The checked-in production environment is approved for personal, single-user
-operation and explicitly sets `haRequired: false`. Its healthy report uses
-`redundancy: not-required`; this is an accepted non-HA deployment, not an
-HA-qualified one. `make validate-ha` intentionally rejects that policy unless
-the environment is later changed to require HA and given numeric acceptance
-objectives.
-
-### 3. Validate source and target cluster
-
-Review the effective non-secret configuration, then run the complete
-mutation-free validation:
-
-```bash
-make show-config \
-  ENVIRONMENT="$ENVIRONMENT" \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-
-make validate-cluster \
-  ENVIRONMENT="$ENVIRONMENT" \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-```
-
-`validate-cluster` includes `validate-local`, unit tests, Go builds, shell and
-Python syntax checks, Helm lint/template checks, client-side Kubernetes
-dry-runs, the URL-ingest container check target, and a read-only cluster
-capacity check. Fix failures before deployment.
-
-### 4. Deploy all seven services
-
-All seven allowlisted components are selected by default:
-
-```bash
-make deploy \
-  ENVIRONMENT="$ENVIRONMENT" \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-```
-
-The root orchestrator follows the dependency graph and emits a final operation
-report. Success requires every selected component to report `succeeded`.
-Deployment is idempotent and does not force restarts when effective state is
-unchanged.
-
-Immediately verify provider workloads:
-
-```bash
-make health-provider \
-  ENVIRONMENT="$ENVIRONMENT" \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-```
-
-On a fresh cluster, dependency health may still fail because the required
-Milvus collections have not been populated. That is expected only until the
-data bootstrap in the next step completes.
-
-### 5. Publish and populate shared data
-
-Data operations are explicit and synchronous:
-
-```bash
-# Fresh bootstrap: publish PDFs, stage URL inputs, ingest all collections,
-# wait for every Job, and verify non-empty Milvus collections.
-make seed-data \
-  CORPUS_GENERATION=release-2026-07-29 \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-```
-
-The supported alternatives are:
-
-```bash
-# Publish a verified PDF generation and atomically switch its current pointer.
-make publish-corpus \
-  CORPUS_GENERATION=release-2026-07-29 \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-
-# Publish PDFs and stage URL inputs without submitting documents.
-make stage-data \
-  CORPUS_GENERATION=release-2026-07-29 \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-
-# Resume from the staged snapshot; exact successful files are skipped.
-make run-ingest \
-  COLLECTIONS="nvidia kubernetes" \
-  EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-```
-
-`pdf-server` is the sole owner of PDF Kubernetes resources and corpus
-publication. URL-ingest consumes the published generation and owns its
-CronJobs, manifests, and ingestion Jobs. Scheduled and manual ingestion share
-a global capacity lock, and normal seed/resume operations never drop a Milvus
-collection.
-
-For a cluster with existing verified collections, do not seed merely because
-services were redeployed. Use `make health-dependencies` to confirm the
-persisted data instead.
-
-### 6. Configure and deploy Daedalus Agent
-
-Render the versioned, non-secret consumer contract:
-
-```bash
-make render-agent-env ENVIRONMENT="$ENVIRONMENT"
-```
-
-Merge that output into the Daedalus Agent deployment through its approved
-configuration path. Add secrets separately:
-
-- `KUBERNETES_MCP_TOKEN` must match the current or next Kubernetes MCP token.
-- `UNIFI_MCP_TOKEN` must match the current or next UniFi MCP token.
-- Milvus and document-object credentials must be synchronized into the
-  Daedalus namespace through the approved Secret-management path.
-
-Do not edit `stack/generated/production-daedalus-context.env` by hand. It is
-generated from the topology/environment contracts, and `validate-local` fails
-if it becomes stale.
-
-Deploy Daedalus Agent from its own repository after the support endpoints and
-credentials are configured.
-
-### 7. Verify the complete path
-
-Run the combined health report after Daedalus is ready:
-
-```bash
-make preflight EXPECTED_CONTEXT="$EXPECTED_CONTEXT"
-scripts/contextctl health-stack \
-  --environment "$ENVIRONMENT" \
-  --components milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
-```
-
-The report separates three concerns:
-
-- `availability`: required service/data-path failures make the stack
-  `unavailable`; optional-tool failures make it `degraded`.
-- `freshness`: stale URL-ingest state is reported independently from online
-  query availability.
-- `redundancy`: is `not-required` for an approved personal non-HA environment,
-  `at-risk` while a required HA gate is unresolved, and `met` only after an HA
-  policy is approved.
-
-The direct command exits `0` for healthy, `1` for required availability loss,
-and `2` for degraded, stale, or at-risk. `not-required` is successful only
-when the environment explicitly approves personal non-HA operation and records
-its accepted risks. Run the guarded `make preflight`
-immediately before it because the direct health command itself is read-only and
-does not apply the Make context guard. `make health-stack` prints the same JSON,
-but GNU Make collapses a nonzero recipe exit; use `contextctl` when automation
-must distinguish `1` from `2`.
-
-Layer-specific diagnostics are also available:
-
-```bash
-make health-provider       # Workloads, rollouts, probes, and PDB-facing state
-make health-dependencies   # Upstreams, PVCs, collections, and freshness
-make health-integration    # Requests from the configured Daedalus workload
-```
-
-Set `CHECK_CONSUMER=false` only when Daedalus has not been deployed yet and the
-requested target supports that mode. A healthy provider check alone does not
-prove that Daedalus can reach or authenticate to the service.
-
-## Updates, Restarts, and Partial Operations
-
-Use:
-
-```bash
-make update                 # Reconcile already-published versioned releases
-make redeploy               # Explicitly restart selected long-running workloads
-make health-stack           # Recheck the complete selected path
-```
-
-Neither operation deletes PVCs or uninstalls Helm releases. `redeploy` is for a
-deliberate restart; it is not the default way to apply configuration.
-
-Limit an operation with the allowlisted `COMPONENTS` variable:
+Limit any operation with the allowlisted `COMPONENTS` variable:
 
 ```bash
 COMPONENTS="k8s-mcp unifi-mcp" make update
 COMPONENTS="milvus retriever nv-ingest" make deploy
 ```
 
-Dependencies are ordered only when they are selected. When operating on
-`nv-ingest` or `url-ingest` alone, either include its dependencies as shown in
-`stack/topology.yaml` or first prove that the existing dependencies are
+Dependencies are ordered only when selected. When operating on `nv-ingest` or
+`url-ingest` alone, include its dependencies or first prove that they are
 healthy.
 
-## Zero-Downtime MCP Token Rotation
+Use the lifecycle targets according to intent:
 
-Each MCP provider accepts a current and next token to permit overlap:
+```bash
+make deploy     # Reconcile desired state without forced restarts.
+make update     # Reconcile already-published versioned releases.
+make redeploy   # Deliberately restart selected long-running workloads.
+```
 
-1. Keep the old token in `K8S_MCP_AUTH_TOKEN` or
-   `UNIFI_MCP_AUTH_TOKEN`.
-2. Put the new token in the matching `*_AUTH_TOKEN_NEXT` value.
-3. Reconcile that provider with `make update`.
-4. Change the Daedalus consumer token and verify `make health-integration`.
-5. Promote the new token to the current value, clear `*_NEXT`, and reconcile
-   the provider again.
+None of these targets uninstall releases or delete PVCs.
 
-Use distinct tokens for the two providers. Never copy one provider's token to
-the other or expose provider tokens in generated non-secret environment files.
+Direct component `deploy.sh` commands remain useful for render inspection,
+focused debugging, and reviewed recovery. They are not an alternate seven-step
+deployment procedure. Return to the root workflow for releases.
 
-## Recovery and Durable State
+## Data Operations
 
-Treat these as durable:
+Data changes are separate from service deployment.
 
-- Milvus, etcd, and MinIO PVCs;
-- the PDF generation PVC;
-- URL download and ingestion-manifest PVCs; and
-- Daedalus application and Redis PVCs.
+```bash
+# Publish PDFs, stage URL inputs, ingest all collections, wait, and verify.
+make seed-data CORPUS_GENERATION=release-2026-08-09
 
-Do not delete PVCs as a cleanup shortcut.
+# Publish a verified PDF generation and atomically select it.
+make publish-corpus CORPUS_GENERATION=release-2026-08-09
 
-| Situation | Correct action |
+# Publish PDFs and stage URL inputs without submitting documents.
+make stage-data CORPUS_GENERATION=release-2026-08-09
+
+# Resume selected staged collections. Previously successful files are skipped.
+make run-ingest COLLECTIONS="nvidia kubernetes"
+```
+
+`pdf-server` solely owns PDF Kubernetes resources and corpus publication.
+`url-ingest` consumes the selected corpus generation and owns its CronJobs,
+manifests, and ingestion Jobs. Scheduled and manual ingestion share a capacity
+lock.
+
+Normal seed and resume operations never drop a Milvus collection. Do not delete
+PVCs or collections to diagnose persistence.
+
+## Daedalus Integration
+
+Generate the non-secret consumer contract:
+
+```bash
+make render-agent-env
+```
+
+Merge that output through the approved Daedalus deployment configuration.
+Synchronize provider tokens and stateful credentials through the approved
+Secret-management path. Do not edit
+`stack/generated/production-daedalus-context.env` by hand.
+
+The native Daedalus reranker endpoint is `/rerank`. NIM-compatible clients use
+`/v1/ranking`. Keep those contracts distinct.
+
+## Health and Diagnostics
+
+Use the narrowest health layer that answers the question:
+
+```bash
+make health-provider       # Workloads, rollouts, probes, and Kubernetes state.
+make health-dependencies   # Upstreams, PVCs, collections, and freshness.
+make health-integration    # Requests from the configured Daedalus workload.
+make health-stack          # Combined availability, freshness, and redundancy.
+```
+
+Set `CHECK_CONSUMER=false` only before Daedalus exists and only for targets that
+support that mode. Provider health alone does not prove that Daedalus can reach
+or authenticate to a service.
+
+`make health-stack` prints JSON and requires the context guard. For automation
+that must distinguish health states, use the direct command after a guarded
+preflight:
+
+```bash
+make preflight
+scripts/contextctl health-stack \
+  --environment "$ENVIRONMENT" \
+  --components milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
+```
+
+The direct command exits:
+
+- `0` for healthy;
+- `1` for required availability loss; and
+- `2` for degraded, stale, or at-risk state.
+
+GNU Make collapses nonzero recipe statuses, so use `contextctl` when the
+difference between `1` and `2` matters.
+
+## Recovery
+
+Treat Milvus, etcd, MinIO, PDF generations, URL manifests, and Daedalus storage
+as durable data.
+
+| Situation | Action |
 | --- | --- |
-| A routine release failed | Read the operation JSON, repair the failed component, then rerun the same root target; independent successes remain intact |
-| Collection Job failed or timed out | Rerun `make run-ingest COLLECTIONS="<name>"`; exact successful files remain recorded |
-| Source files changed | Run `make stage-data`, then rerun only affected collections |
-| PDFs changed | Run `make publish-corpus` with a new generation, then rerun affected collections |
-| Entire collection must be rebuilt | Back up Milvus, drain ingestion, review the exact collection and manifest, then use the component recovery procedure; normal seed mode is non-destructive |
-| Milvus metadata must be reset | Use `nim-milvus-ms/reset-etcd.sh` only with its explicit confirmation after backup review; MinIO is preserved |
-| Daedalus cannot list Kubernetes tools | Check the `k8s-mcp-server` Deployment, Service, current/next token, generated URL, and consumer-side contract probe |
-| Existing retrieval fails | Check Milvus collection counts and retriever adapter health before involving NV-Ingest |
-| New document ingestion fails | Check NV-Ingest, Redis, MinIO, Milvus, and retriever dependencies without taking existing retrieval offline |
+| A release failed | Read the operation JSON, repair the failed component, and rerun the same root target |
+| A collection Job failed | Rerun `make run-ingest COLLECTIONS="<name>"`; successful files remain recorded |
+| Source URLs changed | Run `make stage-data`, then ingest only affected collections |
+| PDFs changed | Publish a new corpus generation, then ingest affected collections |
+| Existing retrieval failed | Check Milvus counts and retriever health before involving ingestion |
+| New ingestion failed | Check NV-Ingest, Redis, MinIO, Milvus, and retriever dependencies |
+| Daedalus cannot list MCP tools | Check provider Deployment, Service, current/next token, generated URL, and consumer probe |
+| A full collection rebuild is required | Back up Milvus, drain ingestion, and use the reviewed component recovery procedure |
 
-## Component-Level Development
+Use `nim-milvus-ms/reset-etcd.sh` only after backup review and its explicit
+confirmation. Never use destructive cleanup as a routine health check.
 
-Use nested project instructions and validation when changing an individual
-component:
+## Component Development
+
+Use component-local tests when changing one service:
 
 ```bash
 cd k8s-multicluster-mcp && make check
@@ -470,24 +395,21 @@ cd url-ingest && cargo test && cargo clippy -- -D warnings
 cd unifi-network-mcp && make test
 ```
 
-Direct child deployment commands remain useful for focused debugging, render
-inspection, and reviewed recovery. Return to the root workflow for a release so
-the context guard, shared endpoints, dependency graph, and health model remain
-consistent.
+Return to the root and run `make validate-local` before a stack-level handoff.
+
+Codex automatically discovers the repository skill at
+`.agents/skills/operate-daedalus-context/`. Invoke it explicitly as
+`$operate-daedalus-context` when a task involves deployment, health, ingestion,
+or recovery.
 
 ## Repository Hygiene
 
-The workspace root may be an initialized Git worktree with no baseline commit,
-while several child directories have their own histories. Check both scopes
-before staging and never assume a root commit includes nested-repository
-changes:
+Check the complete working tree before staging:
 
 ```bash
 git status --short
-git -C k8s-multicluster-mcp status --short
-git -C nv-ingest status --short
-git -C url-ingest status --short
+git diff --check
 ```
 
-Keep commits focused and do not add generated datasets, downloaded URLs,
+Preserve unrelated work. Do not add generated datasets, downloaded URLs,
 caches, `.env` files, kubeconfigs, or credentials.

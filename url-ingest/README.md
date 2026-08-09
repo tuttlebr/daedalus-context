@@ -119,9 +119,8 @@ non-zero and prints Job, Pod, log, and event diagnostics.
 ### 1. Build and push the url-ingest image
 
 ```bash
-docker compose -f ../docker-compose.yaml build url-ingest
-docker compose -f ../docker-compose.yaml push url-ingest
-make -C .. compose-release-refs
+make -C .. images-build
+make -C .. images-publish
 ```
 
 The canonical image repository is
@@ -475,13 +474,12 @@ the deployment-time controls below are injected into immutable manual Jobs.
 | `DROP_COLLECTIONS_BEFORE_INGEST`| `1` to wipe collections (local dev only)       |
 | `CONFIRM_DROP_COLLECTIONS`      | Required with collection-drop mode             |
 
-For Docker Compose, `.env` supplies runner settings not already fixed in the
-workspace-root `docker-compose.yaml`. For Kubernetes, `URL_FILE_CHUNK_SIZE`,
-`PDF_FILE_CHUNK_SIZE`, `CLIENT_BATCH_SIZE`, and `CLIENT_CONCURRENCY_LIMIT` are
-collection-specific values in `k8s/cronjob-*.yaml`; changing only `.env` does
-not override them. Manual Jobs inherit those collection-specific values and add
-the deployment-time timeout, retry, shard, endpoint, and verification overrides
-before the Pod is created.
+The workspace-root `.env` supplies image references and deployment inputs. In
+Kubernetes, `URL_FILE_CHUNK_SIZE`, `PDF_FILE_CHUNK_SIZE`, `CLIENT_BATCH_SIZE`,
+and `CLIENT_CONCURRENCY_LIMIT` are collection-specific values in
+`k8s/cronjob-*.yaml`; changing only `.env` does not override them. Manual Jobs
+inherit those collection-specific values and add the deployment-time timeout,
+retry, shard, endpoint, and verification overrides before the Pod is created.
 
 ## Batching and Failure Behavior
 
@@ -654,33 +652,14 @@ cargo run -- \
 The crawler exits non-zero if any download fails. For local exploration only,
 use `--allow-failures` to accept a partial crawl.
 
-### Local container build
+### Image build
 
 ```bash
-docker compose -f ../docker-compose.yaml build url-ingest
-docker run --rm daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0 url_ingest --help
+make -C .. images-build
 ```
 
 The image runs as a non-root `app` user. `.dockerignore` excludes local data,
 secrets, Python cache, and build output from the Docker context.
-
-### Local NV-Ingest runner
-
-The workspace-root `docker-compose.yaml` mounts:
-
-- `url-ingest/downloaded_urls` at `/workspace/urls`
-- `pdf-server` at `/workspace/pdf-server`
-- `url-ingest/manifests` at `/manifests`
-
-The runner script is baked into the image by `Dockerfile.runner`.
-
-Local failure and status reports are written under `./manifests/`.
-
-Unlike Kubernetes deployment, local Compose cannot read the authoritative
-cluster Secrets. Supply `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and
-`MILVUS_PASSWORD` through the untracked local `.env` consumed by Compose, or a
-Compose override backed by another local secret mechanism; never commit them to
-`.env.example`.
 
 ## CI and Validation
 
@@ -700,7 +679,8 @@ other retrieval-stack components without launching ingestion Jobs:
 
 ```bash
 cd /volume2/daedalus/datasets/daedalus-context
-make validate EXPECTED_CONTEXT="$(kubectl config current-context)"
+export EXPECTED_CONTEXT=kubernetes-admin@kubernetes
+make validate
 ```
 
 Focused URL-ingest checks are:
@@ -719,8 +699,7 @@ docker run --rm -v "$PWD":/work -w /work \
   ghcr.io/yannh/kubeconform:v0.6.7 \
   -strict -ignore-missing-schemas k8s
 
-docker build -t url-ingest:test .
-docker run --rm url-ingest:test url_ingest --help
+make -C .. images-validate
 ```
 
 The Rust test suite currently covers fail-closed download behavior, atomic file
@@ -740,8 +719,8 @@ url-ingest/
   Dockerfile                   # Builds url-ingest image
   nv-ingest-ms-tasks.py        # Python ingest runner, baked into Dockerfile.runner
   Dockerfile.runner            # Digest-pinned NV-Ingest base plus runner source
-  entrypoint-url-ingest.sh     # Docker Compose entrypoint (local dev)
-  ../docker-compose.yaml       # Unified local development specification
+  entrypoint-url-ingest.sh     # Image entrypoint source
+  ../docker-compose.yaml       # Workspace image build specification
   .dockerignore                # Excludes local data/secrets from Docker builds
   .github/workflows/ci.yaml    # CI guardrails
   .env                         # Local env vars (also used by deploy.sh for secrets)

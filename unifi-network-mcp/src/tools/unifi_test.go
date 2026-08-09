@@ -81,6 +81,40 @@ func TestEndpointToolsCountMatchesRegistry(t *testing.T) {
 	}
 }
 
+func TestEndpointToolUsesIntegerPaginationSchemaAndEndpointLimit(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("listVouchers")
+	if !ok {
+		t.Fatal("listVouchers endpoint missing")
+	}
+	tool := EndpointTool(endpoint, ToolDefaults{})
+	limit, ok := tool.InputSchema.Properties["limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected limit schema: %#v", tool.InputSchema.Properties["limit"])
+	}
+	if limit["type"] != "integer" {
+		t.Fatalf("limit type = %v, want integer", limit["type"])
+	}
+	if limit["maximum"] != 1000 {
+		t.Fatalf("limit maximum = %v, want 1000", limit["maximum"])
+	}
+}
+
+func TestFirewallPolicyOrderingToolRequiresZonePair(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("getFirewallPolicyOrdering")
+	if !ok {
+		t.Fatal("getFirewallPolicyOrdering endpoint missing")
+	}
+	tool := EndpointTool(endpoint, ToolDefaults{})
+	for _, name := range []string{"sourceFirewallZoneId", "destinationFirewallZoneId"} {
+		if _, ok := tool.InputSchema.Properties[name]; !ok {
+			t.Fatalf("%s property missing", name)
+		}
+		if !requiredContains(tool.InputSchema.Required, name) {
+			t.Fatalf("%s must be required", name)
+		}
+	}
+}
+
 func requiredContains(required []string, name string) bool {
 	for _, item := range required {
 		if item == name {

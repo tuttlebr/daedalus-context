@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a two-stage URL/PDF ingestion pipeline. `src/main.rs` is the Rust `url_ingest` CLI that reads URL lists or sitemaps and writes `.html`/`.md` files. `nv-ingest-ms-tasks.py` is the Python NV-Ingest runner that chunks, embeds, and uploads files to Milvus. `files/` holds source lists, `downloaded_urls/<collection>/` holds crawl output, and `k8s/` contains deployment, PVC, ConfigMap, Secret, CronJob, and seed-job manifests. `Dockerfile`, `Dockerfile.runner`, and `entrypoint-url-ingest.sh` support local container runs through the workspace-root `../docker-compose.yaml`.
+This repository contains a two-stage URL/PDF ingestion pipeline. `src/main.rs` is the Rust `url_ingest` CLI that reads URL lists or sitemaps and writes `.html`/`.md` files. `nv-ingest-ms-tasks.py` is the Python NV-Ingest runner that chunks, embeds, and uploads files to Milvus. `files/` holds source lists, `downloaded_urls/<collection>/` holds crawl output, and `k8s/` contains deployment, PVC, ConfigMap, Secret, CronJob, and seed-job manifests. `Dockerfile`, `Dockerfile.runner`, and `entrypoint-url-ingest.sh` feed the workspace image specification; Kubernetes is the runtime deployment path.
 
 ## Build, Test, and Development Commands
 
@@ -12,7 +12,7 @@ This repository contains a two-stage URL/PDF ingestion pipeline. `src/main.rs` i
 - `cargo clippy -- -D warnings`: catch Rust lint issues.
 - `cargo test`: run Rust unit tests; add tests as behavior is introduced.
 - `python3 -m py_compile nv-ingest-ms-tasks.py`: quick syntax check for the Python ingest script.
-- `docker compose -f ../docker-compose.yaml build url-ingest`: build the production-style Rust image.
+- `make -C .. images-build`: build all versioned workspace images.
 - `./deploy.sh --seed-data --run-now`: deploy resources, seed PVCs, and trigger ingest jobs.
 
 ## Coding Style & Naming Conventions

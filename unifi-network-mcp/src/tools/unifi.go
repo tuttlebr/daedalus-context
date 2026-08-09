@@ -36,10 +36,11 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
-		mcp.WithNumber("timeoutSeconds",
-			mcp.Min(1),
-			mcp.Max(120),
-			mcp.Description("Optional outbound UniFi API timeout for this request in seconds. Default: 30."),
+		withInteger(
+			"timeoutSeconds",
+			"Optional outbound UniFi API timeout for this request in seconds. Default: 30.",
+			1,
+			120,
 		),
 	}
 
@@ -86,15 +87,20 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 	}
 
 	if endpoint.SupportsPagination {
+		defaultLimit := endpoint.PaginationDefaultLimit()
+		maximumLimit := endpoint.PaginationMaximumLimit()
 		options = append(options,
-			mcp.WithNumber("offset",
-				mcp.Min(0),
-				mcp.Description("Optional pagination offset. UniFi default is 0."),
+			withInteger(
+				"offset",
+				"Optional pagination offset. UniFi default is 0.",
+				0,
+				0,
 			),
-			mcp.WithNumber("limit",
-				mcp.Min(0),
-				mcp.Max(200),
-				mcp.Description("Optional pagination limit. UniFi default is 25; documented maximum is 200."),
+			withInteger(
+				"limit",
+				fmt.Sprintf("Optional pagination limit. UniFi default is %d; documented maximum is %d.", defaultLimit, maximumLimit),
+				0,
+				maximumLimit,
 			),
 		)
 	}
@@ -106,7 +112,31 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 		))
 	}
 
+	for _, param := range endpoint.QueryParams {
+		paramOptions := []mcp.PropertyOption{mcp.Description(param.Description)}
+		if param.Required {
+			paramOptions = append(paramOptions, mcp.Required())
+		}
+		options = append(options, mcp.WithString(param.Name, paramOptions...))
+	}
+
 	return mcp.NewTool(endpoint.Name, options...)
+}
+
+// withInteger adds the integer JSON Schema type that mcp-go's convenience
+// builders do not currently expose. A maximum of zero means unbounded.
+func withInteger(name, description string, minimum, maximum int) mcp.ToolOption {
+	return func(tool *mcp.Tool) {
+		schema := map[string]any{
+			"type":        "integer",
+			"description": description,
+			"minimum":     minimum,
+		}
+		if maximum > 0 {
+			schema["maximum"] = maximum
+		}
+		tool.InputSchema.Properties[name] = schema
+	}
 }
 
 // EndpointTools returns MCP tool schemas for every read-only UniFi endpoint.

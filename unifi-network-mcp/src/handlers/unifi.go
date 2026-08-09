@@ -133,8 +133,9 @@ func buildQuery(endpoint unifi.Endpoint, args map[string]interface{}) (url.Value
 			return nil, err
 		}
 		if ok {
-			if limit < 0 || limit > 200 {
-				return nil, fmt.Errorf("limit must be between 0 and 200")
+			maximumLimit := endpoint.PaginationMaximumLimit()
+			if limit < 0 || limit > maximumLimit {
+				return nil, fmt.Errorf("limit must be between 0 and %d", maximumLimit)
 			}
 			query.Set("limit", strconv.Itoa(limit))
 		}
@@ -145,6 +146,23 @@ func buildQuery(endpoint unifi.Endpoint, args map[string]interface{}) (url.Value
 		if filter != "" {
 			query.Set("filter", filter)
 		}
+	}
+
+	for _, param := range endpoint.QueryParams {
+		var value string
+		if param.Required {
+			var err error
+			value, err = getRequiredStringArg(args, param.Name)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			value = strings.TrimSpace(getStringArg(args, param.Name, ""))
+			if value == "" {
+				continue
+			}
+		}
+		query.Set(param.Name, value)
 	}
 
 	return query, nil

@@ -10,6 +10,38 @@ type Endpoint struct {
 	PathParams         []string
 	SupportsPagination bool
 	SupportsFilter     bool
+	PaginationDefault  int
+	PaginationMaximum  int
+	QueryParams        []QueryParameter
+}
+
+// QueryParameter describes an additional documented string query parameter.
+// Pagination and filter parameters use the dedicated Endpoint fields above.
+type QueryParameter struct {
+	Name        string
+	Description string
+	Required    bool
+}
+
+const (
+	defaultPaginationLimit = 25
+	maximumPaginationLimit = 200
+)
+
+// PaginationDefaultLimit returns the documented default page size.
+func (e Endpoint) PaginationDefaultLimit() int {
+	if e.PaginationDefault > 0 {
+		return e.PaginationDefault
+	}
+	return defaultPaginationLimit
+}
+
+// PaginationMaximumLimit returns the documented maximum page size.
+func (e Endpoint) PaginationMaximumLimit() int {
+	if e.PaginationMaximum > 0 {
+		return e.PaginationMaximum
+	}
+	return maximumPaginationLimit
 }
 
 // Endpoints returns the complete hardcoded read-only MCP surface. Every entry
@@ -141,6 +173,8 @@ var endpoints = []Endpoint{
 		PathParams:         []string{"siteId"},
 		SupportsPagination: true,
 		SupportsFilter:     true,
+		PaginationDefault:  100,
+		PaginationMaximum:  1000,
 	},
 	{
 		Name:        "getVoucherDetails",
@@ -183,10 +217,22 @@ var endpoints = []Endpoint{
 	},
 	{
 		Name:        "getFirewallPolicyOrdering",
-		Description: "Get user-defined firewall policy ordering for a site.",
+		Description: "Get user-defined firewall policy ordering for a source and destination firewall zone pair.",
 		Method:      methodGET,
 		Path:        "/v1/sites/{siteId}/firewall/policies/ordering",
 		PathParams:  []string{"siteId"},
+		QueryParams: []QueryParameter{
+			{
+				Name:        "sourceFirewallZoneId",
+				Description: "Required source firewall zone UUID for the policy ordering.",
+				Required:    true,
+			},
+			{
+				Name:        "destinationFirewallZoneId",
+				Description: "Required destination firewall zone UUID for the policy ordering.",
+				Required:    true,
+			},
+		},
 	},
 	{
 		Name:               "listAclRules",
@@ -298,7 +344,6 @@ var endpoints = []Endpoint{
 		Path:               "/v1/sites/{siteId}/wans",
 		PathParams:         []string{"siteId"},
 		SupportsPagination: true,
-		SupportsFilter:     true,
 	},
 	{
 		Name:               "listSiteToSiteVpnTunnels",
@@ -337,21 +382,27 @@ var endpoints = []Endpoint{
 		SupportsFilter:     true,
 	},
 	{
-		Name:        "listDpiApplicationCategories",
-		Description: "List DPI application categories.",
-		Method:      methodGET,
-		Path:        "/v1/dpi/categories",
+		Name:               "listDpiApplicationCategories",
+		Description:        "List DPI application categories.",
+		Method:             methodGET,
+		Path:               "/v1/dpi/categories",
+		SupportsPagination: true,
+		SupportsFilter:     true,
 	},
 	{
-		Name:        "listDpiApplications",
-		Description: "List DPI applications.",
-		Method:      methodGET,
-		Path:        "/v1/dpi/applications",
+		Name:               "listDpiApplications",
+		Description:        "List DPI applications.",
+		Method:             methodGET,
+		Path:               "/v1/dpi/applications",
+		SupportsPagination: true,
+		SupportsFilter:     true,
 	},
 	{
-		Name:        "listCountries",
-		Description: "List countries known to UniFi Network.",
-		Method:      methodGET,
-		Path:        "/v1/countries",
+		Name:               "listCountries",
+		Description:        "List countries known to UniFi Network.",
+		Method:             methodGET,
+		Path:               "/v1/countries",
+		SupportsPagination: true,
+		SupportsFilter:     true,
 	},
 }

@@ -168,3 +168,42 @@ func TestBuildQueryRejectsInvalidLimit(t *testing.T) {
 		t.Fatal("expected invalid limit error")
 	}
 }
+
+func TestBuildQueryUsesEndpointPaginationMaximum(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("listVouchers")
+	if !ok {
+		t.Fatal("listVouchers endpoint missing")
+	}
+	query, err := buildQuery(endpoint, map[string]interface{}{"limit": float64(1000)})
+	if err != nil {
+		t.Fatalf("buildQuery rejected documented voucher limit: %v", err)
+	}
+	if query.Get("limit") != "1000" {
+		t.Fatalf("limit = %q, want 1000", query.Get("limit"))
+	}
+	if _, err := buildQuery(endpoint, map[string]interface{}{"limit": float64(1001)}); err == nil {
+		t.Fatal("expected voucher limit above 1000 to fail")
+	}
+}
+
+func TestBuildQueryRequiresFirewallPolicyOrderingZonePair(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("getFirewallPolicyOrdering")
+	if !ok {
+		t.Fatal("getFirewallPolicyOrdering endpoint missing")
+	}
+	args := map[string]interface{}{
+		"sourceFirewallZoneId":      "source-zone",
+		"destinationFirewallZoneId": "destination-zone",
+	}
+	query, err := buildQuery(endpoint, args)
+	if err != nil {
+		t.Fatalf("buildQuery failed: %v", err)
+	}
+	if query.Get("sourceFirewallZoneId") != "source-zone" || query.Get("destinationFirewallZoneId") != "destination-zone" {
+		t.Fatalf("query = %q", query.Encode())
+	}
+	delete(args, "destinationFirewallZoneId")
+	if _, err := buildQuery(endpoint, args); err == nil {
+		t.Fatal("expected missing destination firewall zone to fail")
+	}
+}

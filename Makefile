@@ -8,9 +8,8 @@ KUBECTL ?= kubectl
 HELM ?= helm
 JQ ?= jq
 COMPOSE ?= docker compose
-KUBECONFIG_GROUP_ID ?= $(shell id -g)
-COMPOSE_KUBECONFIG_PATH ?= /tmp/daedalus-context-compose-$(shell id -u)/kubeconfig
-COMPOSE_BUILD_SERVICES := k8s-mcp-server-read-only unifi-network-mcp-server pdf-server url-ingest nv-ingest-ms-tasks
+ENV_FILE ?= $(ROOT_DIR)/.env
+IMAGE_BUILD_SERVICES := k8s-mcp-server-read-only unifi-network-mcp-server pdf-server url-ingest nv-ingest-ms-tasks
 DAEDALUS_CONTEXT_IMAGE_VERSION ?= 0.1.0
 EXPECTED_CONTEXT ?=
 ROLLOUT_TIMEOUT ?= 20m
@@ -114,125 +113,78 @@ ifneq ($(strip $(UNKNOWN_COMPONENTS)),)
 $(error Unsupported COMPONENTS: $(UNKNOWN_COMPONENTS). Choose from: $(SUPPORTED_COMPONENTS))
 endif
 
-.PHONY: help show-config compose-config compose-build compose-push compose-release-refs compose-publish \
-	compose-up compose-down compose-crawl compose-ingest \
+.PHONY: help doctor show-config require-context \
+	images-validate images-build images-push images-release-refs images-publish \
+	compose-config compose-build compose-push compose-release-refs compose-publish \
 	preflight validate validate-local validate-cluster validate-ha render-agent-env deploy update redeploy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
 	deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
 	update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
 	redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
+	health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
+	health-provider-url-ingest health-provider-k8s-mcp health-provider-unifi-mcp \
+	health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
+	health-dependencies-pdf-server health-dependencies-url-ingest health-dependencies-k8s-mcp health-dependencies-unifi-mcp \
+	health-integration-milvus health-integration-retriever health-integration-nv-ingest health-integration-pdf-server \
+	health-integration-url-ingest health-integration-k8s-mcp health-integration-unifi-mcp \
 	healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server healthcheck-url-ingest \
 	healthcheck-k8s-mcp healthcheck-unifi-mcp
 
-help: ## Show targets and the deployment model.
+CLUSTER_TARGETS := preflight validate validate-cluster deploy update redeploy \
+	health-provider health-dependencies health-integration health-stack healthcheck healthcheck-agent \
+	publish-corpus stage-data seed-data run-ingest \
+	deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
+	update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
+	redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
+	health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
+	health-provider-url-ingest health-provider-k8s-mcp health-provider-unifi-mcp \
+	health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
+	health-dependencies-pdf-server health-dependencies-url-ingest health-dependencies-k8s-mcp \
+	health-dependencies-unifi-mcp health-integration-milvus health-integration-retriever \
+	health-integration-nv-ingest health-integration-pdf-server health-integration-url-ingest \
+	health-integration-k8s-mcp health-integration-unifi-mcp \
+	healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server \
+	healthcheck-url-ingest healthcheck-k8s-mcp healthcheck-unifi-mcp
+
+$(CLUSTER_TARGETS): | require-context
+
+##@ Getting started
+
+help: ## [read-only] Show supported workflows and their side effects.
+	@printf '%s\n' 'Daedalus context Kubernetes operations'
+	@awk ' \
+	  /^##@ / { printf "\n%s\n", substr($$0, 5); next } \
+	  /^[A-Za-z0-9_.-]+:.*## / { \
+	    target = $$1; sub(/:.*/, "", target); \
+	    description = $$0; sub(/^[^#]*## /, "", description); \
+	    printf "  %-24s %s\n", target, description; \
+	  }' "$(lastword $(MAKEFILE_LIST))"
 	@printf '%s\n' \
-	  'Daedalus retrieval-stack operations' \
 	  '' \
-	  '  make deploy                 Reconcile selected components; no forced restart' \
-	  '  make update                 Reconcile selected versioned release images' \
-	  '  make redeploy               Restart long-running workloads; never delete data' \
-	  '  make health-provider        Check provider workloads without requiring Daedalus' \
-	  '  make health-dependencies    Check provider dependency and data freshness state' \
-	  '  make health-integration     Check access from the Daedalus workload' \
-	  '  make healthcheck            Run the complete selected health stack' \
-	  '  make validate-local         Run mutation-free tests and renders without cluster access' \
-	  '  make validate-cluster       Check active cluster prerequisites and dry-runs' \
-	  '  make validate-ha            Require owner-approved numeric HA acceptance policy' \
-	  '  make render-agent-env       Render generated Daedalus provider endpoints' \
-	  '  make compose-up             Build and start the three local serving containers' \
-	  '  make compose-publish        Build, push, and print all five versioned images' \
-	  '  make compose-release-refs   Print the SemVer deployment image settings' \
-	  '  make compose-down           Stop the unified local Compose project' \
-	  '  make compose-crawl          Run the opt-in URL crawler container once' \
-	  '  make compose-ingest         Run the opt-in NV-Ingest task container once' \
-	  '' \
-	  'Select components with COMPONENTS="milvus retriever nv-ingest".' \
-	  'Use STACK_NAMESPACE only for an intentional namespace migration; PVC data is not migrated.' \
-	  'Set EXPECTED_CONTEXT to make every operation refuse the wrong kubectl context.' \
-	  'Set CHECK_CONSUMER=false to skip probes executed from AGENT_WORKLOAD.' \
-	  '' \
-	  'Opt-in data jobs:' \
-	  '  make stage-data             Copy repository data into ingestion PVCs only' \
-	  '  make seed-data              Stage, ingest, wait, and verify all collections' \
-	  '  make run-ingest             Ingest staged data, wait, and verify all collections' \
-	  '  make run-ingest COLLECTIONS="nvidia kubernetes"'
+	  'Required for every Kubernetes target: EXPECTED_CONTEXT=<approved literal context>' \
+	  'Select components with: COMPONENTS="milvus retriever nv-ingest"' \
+	  'Skip consumer probes before Daedalus exists with: CHECK_CONSUMER=false' \
+	  'Use STACK_NAMESPACE only for a reviewed namespace and PVC migration.'
 
-compose-config: ## Validate the unified local Compose model.
-	@command -v docker >/dev/null
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  bash "$(ROOT_DIR)/scripts/stage-compose-kubeconfig.sh"
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest config --quiet
-	@source "$(ROOT_DIR)/scripts/image-reference.sh"; \
-	  while IFS= read -r image; do \
-	    require_semver_image_ref "Compose image" "$$image"; \
-	  done < <(KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	    COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	    $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	    --profile ingest config --images)
+doctor: ## [read-only cluster] Check tools, exported configuration, context, and cluster access.
+	@[[ -f "$(ENV_FILE)" ]] || { \
+	  echo "Missing $(ENV_FILE). Copy .env.example, edit it, then source it with export enabled." >&2; exit 1; \
+	}
+	@bash -n "$(ENV_FILE)"
+	@for command in bash python3 "$(JQ)" "$(KUBECTL)" "$(HELM)" docker; do \
+	  command -v "$$command" >/dev/null || { echo "Missing required command: $$command" >&2; exit 1; }; \
+	done
+	@$(MAKE) --version | head -n 1 | grep -Fq 'GNU Make' || { echo 'GNU Make is required.' >&2; exit 1; }
+	@$(COMPOSE) version >/dev/null
+	@[[ -n "$(K8S_MCP_IMAGE)" && -n "$(URL_INGEST_IMAGE)" ]] || { \
+	  echo 'Root .env values are not exported to Make. Run: set -a; source .env; set +a' >&2; exit 1; \
+	}
+	@$(MAKE) --no-print-directory require-context
+	@$(KUBECTL) cluster-info >/dev/null
+	@echo 'Doctor checks passed. Next: make validate-cluster'
 
-compose-build: compose-config ## Build every locally maintained Compose image.
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest build $(COMPOSE_BUILD_SERVICES)
-
-compose-push: compose-build ## Build and push every workspace image to its configured repository.
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest push $(COMPOSE_BUILD_SERVICES)
-
-compose-release-refs: compose-config ## Print SemVer-tagged Kubernetes deployment image settings.
-	@command -v "$(JQ)" >/dev/null
-	@config="$$(KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest config --format json)"; \
-	resolve_image() { \
-	  variable="$$1"; \
-	  service="$$2"; \
-	  image="$$(printf '%s' "$$config" | $(JQ) -er --arg service "$$service" \
-	    '.services[$$service].image')"; \
-	  printf '%s=%s\n' "$$variable" "$$image"; \
-	}; \
-	resolve_image K8S_MCP_IMAGE k8s-mcp-server-read-only; \
-	resolve_image UNIFI_MCP_IMAGE unifi-network-mcp-server; \
-	resolve_image PDF_SERVER_IMAGE pdf-server; \
-	resolve_image URL_INGEST_IMAGE url-ingest; \
-	resolve_image URL_INGEST_RUNNER_IMAGE nv-ingest-ms-tasks
-
-compose-publish: compose-push compose-release-refs ## Build, push, and print versioned deployment refs.
-
-compose-up: compose-config ## Start local MCP and PDF serving containers.
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  up --detach --build
-
-compose-down: ## Stop the unified local Compose project.
-	@command -v docker >/dev/null
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" down
-
-compose-crawl: compose-config ## Run the opt-in URL crawler once.
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest run --rm url-ingest
-
-compose-ingest: compose-config ## Run the opt-in NV-Ingest task once.
-	@KUBECONFIG_GROUP_ID="$(KUBECONFIG_GROUP_ID)" \
-	  COMPOSE_KUBECONFIG_PATH="$(COMPOSE_KUBECONFIG_PATH)" \
-	  $(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
-	  --profile ingest run --rm nv-ingest-ms-tasks
-
-show-config: ## Print non-secret operational configuration.
+show-config: ## [read-only] Print effective non-secret operational configuration.
 	@printf '%-24s %s\n' \
 	  'components' '$(COMPONENTS)' \
 	  'agent namespace' '$(AGENT_NAMESPACE)' \
@@ -259,15 +211,69 @@ show-config: ## Print non-secret operational configuration.
 	  'unifi-mcp namespace' '$(UNIFI_MCP_NAMESPACE)' \
 	  'unifi-mcp nodeport' '$(UNIFI_MCP_NODE_PORT)' \
 	  'MCP external clients' '$(MCP_EXTERNAL_CLIENT_CIDR)' \
-	  'expected context' '$(or $(EXPECTED_CONTEXT),<current>)'
+	  'expected context' '$(or $(EXPECTED_CONTEXT),<required>)'
 
-preflight: ## Verify tools, cluster access, and optional context guard.
+##@ Image lifecycle
+
+images-validate: ## [read-only local] Validate all five versioned image specifications.
+	@command -v docker >/dev/null || { echo 'Missing required command: docker' >&2; exit 1; }
+	@$(COMPOSE) version >/dev/null
+	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	  --profile ingest config --quiet
+	@source "$(ROOT_DIR)/scripts/image-reference.sh"; \
+	  while IFS= read -r image; do \
+	    require_semver_image_ref "Compose image" "$$image"; \
+	  done < <($(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	    --profile ingest config --images)
+
+images-build: images-validate ## [local write] Build every locally maintained release image.
+	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	  --profile ingest build $(IMAGE_BUILD_SERVICES)
+
+images-push: images-build ## [registry write] Push every workspace release image.
+	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	  --profile ingest push $(IMAGE_BUILD_SERVICES)
+
+images-release-refs: images-validate ## [read-only local] Print Kubernetes image environment assignments.
+	@command -v "$(JQ)" >/dev/null || { echo 'Missing required command: $(JQ)' >&2; exit 1; }
+	@config="$$($(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	  --profile ingest config --format json)"; \
+	resolve_image() { \
+	  variable="$$1"; \
+	  service="$$2"; \
+	  image="$$(printf '%s' "$$config" | $(JQ) -er --arg service "$$service" \
+	    '.services[$$service].image')"; \
+	  printf '%s=%s\n' "$$variable" "$$image"; \
+	}; \
+	resolve_image K8S_MCP_IMAGE k8s-mcp-server-read-only; \
+	resolve_image UNIFI_MCP_IMAGE unifi-network-mcp-server; \
+	resolve_image PDF_SERVER_IMAGE pdf-server; \
+	resolve_image URL_INGEST_IMAGE url-ingest; \
+	resolve_image URL_INGEST_RUNNER_IMAGE nv-ingest-ms-tasks
+
+images-publish: images-push images-release-refs ## [registry write] Build, push, and print all release references.
+
+# Backward-compatible image lifecycle aliases. These stay hidden from help.
+compose-config: images-validate
+compose-build: images-build
+compose-push: images-push
+compose-release-refs: images-release-refs
+compose-publish: images-publish
+
+##@ Kubernetes lifecycle
+
+require-context:
 	@command -v "$(KUBECTL)" >/dev/null || { echo "Missing kubectl: $(KUBECTL)" >&2; exit 1; }
+	@[[ -n "$(strip $(EXPECTED_CONTEXT))" ]] || { \
+	  echo 'EXPECTED_CONTEXT is required for every Kubernetes target.' >&2; exit 1; \
+	}
 	@current="$$($(KUBECTL) config current-context)"; \
-	  if [[ -n "$(EXPECTED_CONTEXT)" && "$$current" != "$(EXPECTED_CONTEXT)" ]]; then \
+	  if [[ "$$current" != "$(EXPECTED_CONTEXT)" ]]; then \
 	    echo "Refusing context '$$current'; expected '$(EXPECTED_CONTEXT)'." >&2; exit 1; \
 	  fi; \
 	  echo "Kubernetes context: $$current"
+
+preflight: ## [read-only cluster] Verify the guarded context and cluster access.
 	@$(KUBECTL) cluster-info >/dev/null
 
 define run_components
@@ -300,29 +306,31 @@ define check_components
 	printf '\n%s summary: PASS (%s/%s)\n' '$(1)' "$$total" "$$total"
 endef
 
-deploy: preflight ## Idempotently reconcile all selected components.
+deploy: preflight ## [cluster write] Reconcile selected components without forcing restarts.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action deploy --components $(COMPONENTS)
 
-update: preflight ## Reconcile selected components to already-published versioned releases.
+update: preflight ## [cluster write] Reconcile selected already-published release images.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action update --components $(COMPONENTS)
 
-redeploy: preflight ## Restart selected workloads without uninstalling or deleting PVCs.
+redeploy: preflight ## [cluster write] Restart selected workloads without deleting durable data.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action redeploy --components $(COMPONENTS)
 
-health-provider: preflight ## Check provider processes and Kubernetes resources without requiring Daedalus.
+##@ Health and diagnostics
+
+health-provider: preflight ## [read-only cluster] Check provider workloads without requiring Daedalus.
 	$(call check_components,health-provider)
 
-health-dependencies: preflight ## Check upstream dependencies, persistence, and collection freshness.
+health-dependencies: preflight ## [read-only cluster] Check dependencies, persistence, and data freshness.
 	$(call check_components,health-dependencies)
 
-health-integration: preflight healthcheck-agent ## Check selected provider paths from the Daedalus workload.
+health-integration: preflight healthcheck-agent ## [read-only cluster] Probe selected providers from Daedalus.
 	$(call check_components,health-integration)
 
-health-stack: ## Print non-binary JSON health; use contextctl directly when the exact 0/1/2 status is required.
+health-stack: ## [read-only cluster] Print combined availability, freshness, and redundancy JSON.
 	@"$(ROOT_DIR)/scripts/contextctl" health-stack --environment "$(ENVIRONMENT)" \
 	  --components $(COMPONENTS)
 
-healthcheck: health-stack ## Backward-compatible complete health stack.
+healthcheck: health-stack
 
 healthcheck-agent:
 	@$(KUBECTL) get namespace "$(AGENT_NAMESPACE)" >/dev/null
@@ -775,9 +783,9 @@ healthcheck-url-ingest: health-provider-url-ingest health-dependencies-url-inges
 healthcheck-k8s-mcp: health-provider-k8s-mcp health-dependencies-k8s-mcp $(if $(filter true,$(CHECK_CONSUMER)),health-integration-k8s-mcp)
 healthcheck-unifi-mcp: health-provider-unifi-mcp health-dependencies-unifi-mcp $(if $(filter true,$(CHECK_CONSUMER)),health-integration-unifi-mcp)
 
-# Explicit data mutations -----------------------------------------------------
+##@ Data operations
 
-publish-corpus: preflight ## Publish and atomically select a new PDF corpus generation.
+publish-corpus: preflight ## [data write] Publish and atomically select a PDF corpus generation.
 	@cd "$(ROOT_DIR)/pdf-server" && \
 	  TARGET=kubernetes NAMESPACE="$(PDF_SERVER_NAMESPACE)" PUBLISH_CORPUS=true \
 	  AGENT_NAMESPACE="$(AGENT_NAMESPACE)" URL_INGEST_NAMESPACE="$(URL_INGEST_NAMESPACE)" \
@@ -804,23 +812,23 @@ define run_ingest_operation
 	  bash k8s/deploy.sh $(1)
 endef
 
-stage-data: publish-corpus ## Publish PDF corpus and copy repository URL data without ingesting it.
+stage-data: publish-corpus ## [data write] Publish PDFs and stage URL inputs without ingesting them.
 	$(call run_ingest_operation,--stage-data)
 
-seed-data: publish-corpus ## Publish/stage, ingest, wait, and verify COLLECTIONS or all.
+seed-data: publish-corpus ## [data write] Publish, stage, ingest, wait, and verify collections.
 	$(call run_ingest_operation,--stage-data --run-now $(COLLECTIONS))
 
-run-ingest: preflight ## Ingest staged data, synchronously wait, and verify COLLECTIONS or all.
+run-ingest: preflight ## [data write] Ingest staged data, wait, and verify selected collections.
 	$(call run_ingest_operation,--run-now $(COLLECTIONS))
 
-# Mutation-free validation ---------------------------------------------------
+##@ Validation and integration
 
-validate: validate-local validate-cluster ## Run local contracts and active-cluster dry-runs.
+validate: validate-local validate-cluster ## [read-only cluster] Run local checks and cluster dry-runs.
 
-validate-local: ## Run source tests and renders without requiring cluster credentials.
+validate-local: ## [read-only local] Run source tests and renders without cluster credentials.
 	@command -v python3 >/dev/null
 	@command -v "$(HELM)" >/dev/null
-	@$(MAKE) --no-print-directory compose-config
+	@$(MAKE) --no-print-directory images-validate
 	@"$(ROOT_DIR)/scripts/contextctl" validate --environment "$(ENVIRONMENT)"
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)" \
 	  --check "$(GENERATED_AGENT_ENV)"
@@ -889,13 +897,13 @@ validate-local: ## Run source tests and renders without requiring cluster creden
 	@cd "$(ROOT_DIR)/url-ingest" && docker build --target check . >/dev/null
 	@echo "Local validation passed."
 
-validate-ha: ## Fail until production HA policy and storage decisions are owner-approved.
+validate-ha: ## [read-only local] Require an approved numeric HA acceptance policy.
 	@"$(ROOT_DIR)/scripts/contextctl" validate --environment "$(ENVIRONMENT)" --require-ha
 
-render-agent-env: ## Print generated Daedalus provider endpoints.
+render-agent-env: ## [read-only local] Print generated Daedalus provider endpoints.
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)"
 
-validate-cluster: preflight validate-local ## Validate active manifests without mutating cluster state.
+validate-cluster: preflight validate-local ## [read-only cluster] Validate active manifests with dry-runs.
 	@KUBECTL="$(KUBECTL)" PYTHONDONTWRITEBYTECODE=1 \
 	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py"
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \

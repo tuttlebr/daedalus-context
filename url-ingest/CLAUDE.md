@@ -11,7 +11,7 @@ This is a two-stage RAG ingestion pipeline composed of two independent programs 
 - **`k8s/`** — Manifests for the production deployment. The two programs run as one CronJob per collection: the Rust crawler is an `initContainer`, the Python ingest is the main `container`, and they share PVCs.
 - **`files/*.txt`** — Input URL lists / sitemap lists (one URL per line, `#` comments allowed).
 
-Local Docker Compose (`docker-compose.yaml` + `entrypoint-url-ingest.sh`) exists for ad-hoc local runs and does not write to Milvus by default.
+The workspace `docker-compose.yaml` defines image builds only. Kubernetes is the runtime deployment path.
 
 ## Common commands
 
@@ -24,9 +24,9 @@ cargo build
 # Local release build
 cargo build --release
 
-# Container build (multi-arch via buildx; cross-compiles to musl)
-docker compose build url-ingest
-docker compose push url-ingest
+# Workspace image build and publish
+make -C .. images-build
+make -C .. images-publish
 ```
 
 There is no test suite (no `tests/`, no `#[test]` functions, no pytest config). `cargo check` and `cargo clippy` are the fastest correctness signals.
@@ -92,7 +92,7 @@ Every CronJob has the same shape: one or more `initContainers` running `url_inge
 
 ### Single-collection ingest mode
 
-In K8s, each CronJob runs the Python script with `INGEST_MODE=single` and `SINGLE_COLLECTION=<name>` so it only touches one Milvus collection. `INCLUDE_PDFS=true` adds PDF discovery for that collection. Without these vars (the default, used by Docker Compose), the script iterates over `URL_COLLECTIONS` and `PDF_COLLECTIONS` (`kubernetes,mentalhealth,nvidia,semianalysis,vetpartner`) and processes everything.
+In K8s, each CronJob runs the Python script with `INGEST_MODE=single` and `SINGLE_COLLECTION=<name>` so it only touches one Milvus collection. `INCLUDE_PDFS=true` adds PDF discovery for that collection. Without these vars, the script iterates over `URL_COLLECTIONS` and `PDF_COLLECTIONS` (`kubernetes,mentalhealth,nvidia,semianalysis,vetpartner`) and processes everything.
 
 ### Idempotency: two layers, do not break
 
@@ -122,8 +122,8 @@ Small lists (`nvidiadocs`, `nvidia`, `semianalysis`) ship inline in `k8s/configm
 
 ## Sources of truth and gotchas
 
-- `.env` at the project root is required for `deploy.sh` (it sources HF/MinIO credentials from it to create the K8s secret). It is also the env file for local Docker Compose runs.
-- `MINIO_BUCKET` is **not** in `.env` — it is set inline in each CronJob's `env:` block (currently `nv-ingest`). Local Docker Compose runs need it added to `.env` or exported.
+- `.env` at the project root is required for `deploy.sh`; it supplies image settings and the HF/MinIO credentials used to create the Kubernetes Secret.
+- `MINIO_BUCKET` is set in the root `.env` and rendered into the Kubernetes Jobs (currently `nv-ingest`).
 - Sitemap parsing tolerates malformed `lastmod` and missing entries; the parser tries RFC 3339, then `%Y-%m-%dT%H:%M:%S`, then `%Y-%m-%d`. URLs with unparseable lastmods bypass `--max-age-days` filtering.
 - The `is_us_host` function (despite the name) actually permits common gTLDs (`.com`, `.io`, `.ai`, etc.) — it is a coarse non-CCTLD allowlist, not a US-only filter.
 - The crawler's `User-Agent` is hardcoded as `nv-ingest/26.1.2` in `src/main.rs`.

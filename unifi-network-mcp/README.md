@@ -1,6 +1,6 @@
 # UniFi Network Read-Only MCP Server
 
-Read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for the local UniFi Network integration API on a UDM/UniFi console. It exposes only documented `GET` operations from `0-UDM-Pro-Max-API.mhtml` and authenticates to UniFi with `X-API-KEY`.
+Read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for the local UniFi Network integration API on a UDM/UniFi console. It exposes every documented `GET` operation from the [UniFi Network 10.4.57 OpenAPI contract](https://developer.ui.com/network/v10.4.57/openapi.json) and authenticates to UniFi with `X-API-KEY`.
 
 By default the server starts without a UniFi device URL, API key, or device credentials. MCP clients can provide `baseUrl` and `apiKey` on each tool call, or private deployments can configure server-side defaults with environment variables.
 
@@ -14,11 +14,22 @@ By default the server starts without a UniFi device URL, API key, or device cred
 - TLS verification is enabled by default. Clients can set `insecureSkipVerify=true` per tool call, or trusted deployments can configure `UNIFI_INSECURE_SKIP_VERIFY=true`.
 - Sanitizes secret-like keys and rejects oversized tool responses with a compact JSON error.
 
+## Validate UniFi API Access
+
+Generate an API key at [unifi.ui.com](https://unifi.ui.com/) (Settings → API Keys), then make one safe read-only request directly to the local Network integration API:
+
+```bash
+curl --fail --silent --show-error \
+  --header 'X-API-KEY: YOUR_API_KEY' \
+  --header 'Accept: application/json' \
+  'https://<unifi-console>/proxy/network/integration/v1/info'
+```
+
+Keep TLS verification enabled. If the console uses a private CA, trust that CA rather than disabling certificate verification.
+
 ## Quick Start
 
 ```bash
-cp .env.example .env
-
 cd src
 go mod download
 CGO_ENABLED=0 go build -o unifi-network-mcp-server main.go
@@ -74,18 +85,16 @@ Every UniFi tool accepts these connection arguments. `baseUrl` and `apiKey` are 
 | `insecureSkipVerify` | no | Set `true` only for self-signed local console certificates |
 | `timeoutSeconds` | no | Per-call outbound timeout, default `30`, max `120` |
 
-## Docker Compose
+## Image Release
 
 ```bash
 cd ..
-docker compose up --build unifi-network-mcp-server
-docker compose push unifi-network-mcp-server
-make compose-release-refs
+make images-build
+make images-release-refs
 ```
 
-The workspace-root `docker-compose.yaml` is the canonical Compose
-specification. Its default UniFi host port is `8082`, and its default image is
-`daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0`.
+The workspace-root `docker-compose.yaml` is the canonical image specification.
+Kubernetes is the supported runtime deployment path.
 
 ## Kubernetes Deployment
 
@@ -95,7 +104,7 @@ Set distinct `UNIFI_MCP_AUTH_TOKEN`, a SemVer-tagged `UNIFI_MCP_IMAGE`,
 CIDR.
 
 ```bash
-cp .env.example .env
+cp ../.env.example ../.env
 # Edit the required UNIFI_* values and image version.
 ./deploy.sh
 ```
@@ -117,3 +126,7 @@ only when effective configuration changes.
 make test
 make build
 ```
+
+The tests compare the hardcoded MCP registry and its parameters with
+`network_v10.4.57_openapi.json`, including all 41 GET paths and the absence of
+write operations.
