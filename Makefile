@@ -2,6 +2,11 @@ SHELL := /usr/bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
+# Always recurse with the GNU Make executable that is parsing this file. An
+# exported MAKE value must not redirect doctor or component operations to an
+# unrelated command.
+override MAKE := $(MAKE_COMMAND)
+
 ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 comma := ,
 KUBECTL ?= kubectl
@@ -17,31 +22,41 @@ ENVIRONMENT ?= production
 GENERATED_AGENT_ENV ?= $(ROOT_DIR)/stack/generated/$(ENVIRONMENT)-daedalus-context.env
 COMPOSE_FILE := $(ROOT_DIR)/docker-compose.yaml
 
-# The agent consumes these services from this namespace. Services keep their
-# existing namespaces by default so a routine deploy never creates new PVCs.
+# Every context aid and the Agent share one reviewed namespace. Component
+# aliases remain for the existing health/data scripts, but cannot diverge.
 AGENT_NAMESPACE ?= daedalus
 AGENT_WORKLOAD ?= deployment/daedalus-backend-default
-STACK_NAMESPACE ?=
-
-MILVUS_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),milvus)
-NV_INGEST_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),nv-ingest)
-PDF_SERVER_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),$(MILVUS_NAMESPACE))
-URL_INGEST_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),$(MILVUS_NAMESPACE))
-K8S_MCP_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),k8s-mcp-server)
-UNIFI_MCP_NAMESPACE ?= $(if $(strip $(STACK_NAMESPACE)),$(STACK_NAMESPACE),unifi-network-mcp-server)
-RETRIEVER_NAMESPACE ?= daedalus-retriever
+DAEDALUS_NAMESPACE ?= daedalus
+override MILVUS_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override NV_INGEST_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override PDF_SERVER_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override URL_INGEST_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override K8S_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override UNIFI_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
+override RETRIEVER_NAMESPACE := $(DAEDALUS_NAMESPACE)
 K8S_MCP_NODE_PORT ?= 30080
 UNIFI_MCP_NODE_PORT ?= 30081
 MCP_EXTERNAL_CLIENT_CIDR ?= 192.168.1.0/24
+MCP_EXTERNAL_ENABLED ?= false
+URL_INGEST_SUSPEND ?= true
 
 MILVUS_RELEASE ?= milvus
 NV_INGEST_RELEASE ?= nv-ingest
 RETRIEVER_RELEASE ?= nemotron-retriever
 RETRIEVER_FULLNAME ?= nemotron-retriever
 RETRIEVER_CHART ?= $(ROOT_DIR)/nemotron-retriever
+MILVUS_CHART ?= $(ROOT_DIR)/helm/milvus
+NV_INGEST_CHART ?= $(ROOT_DIR)/helm/nv-ingest
+PDF_SERVER_CHART ?= $(ROOT_DIR)/helm/pdf-server
+URL_INGEST_CHART ?= $(ROOT_DIR)/helm/url-ingest
+K8S_MCP_CHART ?= $(ROOT_DIR)/helm/k8s-mcp-server
+UNIFI_MCP_CHART ?= $(ROOT_DIR)/helm/unifi-network-mcp-server
+HINDSIGHT_ROOT ?= $(abspath $(ROOT_DIR)/../daedalus-hindsight)
+HINDSIGHT_CHART ?= $(HINDSIGHT_ROOT)/charts/daedalus-hindsight
+HINDSIGHT_RELEASE ?= hindsight
 # Production-safe chart defaults are used unless the operator explicitly names
 # an override. NodePort examples are never auto-discovered.
-RETRIEVER_VALUES_FILE ?= nemotron-retriever/custom-values.yaml
+RETRIEVER_VALUES_FILE ?= nemotron-retriever/values-daedalus.yaml
 RETRIEVER_ROLLOUT_TIMEOUT ?= 30m
 MILVUS_SERVICE ?= $(MILVUS_RELEASE)
 MINIO_SERVICE ?= $(MILVUS_RELEASE)-minio
@@ -56,27 +71,45 @@ NV_INGEST_VERSION ?= 26.3.0
 
 RETRIEVER_EMBEDDING_SERVICE ?= $(RETRIEVER_FULLNAME)-embedder
 RETRIEVER_RERANKER_SERVICE ?= $(RETRIEVER_FULLNAME)-reranker
-EMBEDDING_NIM_ENDPOINT ?= http://$(RETRIEVER_EMBEDDING_SERVICE).$(RETRIEVER_NAMESPACE).svc.cluster.local:8000/v1
+override EMBEDDING_NIM_ENDPOINT := http://$(RETRIEVER_EMBEDDING_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/v1
 EMBEDDING_NIM_MODEL_NAME ?= nvidia/llama-nemotron-embed-vl-1b-v2
-DAEDALUS_RERANKER_ENDPOINT ?= http://$(RETRIEVER_RERANKER_SERVICE).$(RETRIEVER_NAMESPACE).svc.cluster.local:8000/rerank
-NIM_RERANKER_ENDPOINT ?= http://$(RETRIEVER_RERANKER_SERVICE).$(RETRIEVER_NAMESPACE).svc.cluster.local:8000/v1/ranking
+override DAEDALUS_RERANKER_ENDPOINT := http://$(RETRIEVER_RERANKER_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/rerank
+override NIM_RERANKER_ENDPOINT := http://$(RETRIEVER_RERANKER_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/v1/ranking
 RERANKER_MODEL_NAME ?= nvidia/llama-nemotron-rerank-1b-v2
 
-MILVUS_ENDPOINT ?= http://$(MILVUS_SERVICE).$(MILVUS_NAMESPACE).svc.cluster.local:19530
-MINIO_ENDPOINT ?= http://$(MINIO_SERVICE).$(MILVUS_NAMESPACE).svc.cluster.local:9000
+override MILVUS_ENDPOINT := http://$(MILVUS_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:19530
+override MINIO_ENDPOINT := http://$(MINIO_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:9000
 MINIO_INGEST_ENDPOINT ?= $(patsubst https://%,%,$(patsubst http://%,%,$(MINIO_ENDPOINT)))
-NV_INGEST_ENDPOINT ?= http://$(NV_INGEST_SERVICE).$(NV_INGEST_NAMESPACE).svc.cluster.local:7670
-NV_INGEST_MESSAGE_HOST ?= $(NV_INGEST_SERVICE).$(NV_INGEST_NAMESPACE).svc.cluster.local
+override NV_INGEST_ENDPOINT := http://$(NV_INGEST_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:7670
+override HINDSIGHT_API_URL := http://hindsight-api.$(DAEDALUS_NAMESPACE).svc.cluster.local:8888
+override NV_INGEST_MESSAGE_HOST := $(NV_INGEST_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local
 NV_INGEST_MESSAGE_PORT ?= 7670
 # Each replica reserves 24 CPU and 24 GiB. Two distinct nodes currently meet
 # that placement contract; a third replica would remain Pending.
 NV_INGEST_REPLICA_COUNT ?= 2
-# Deliberately empty: production operators must select a shared, durable URI.
+# Production operators select the shared URI as IMAGE_STORAGE_URI in .env.
+# The prefixed alias is available for an explicit chart-only override.
 NV_INGEST_IMAGE_STORAGE_URI ?=
+EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI := $(or $(strip $(NV_INGEST_IMAGE_STORAGE_URI)),$(strip $(IMAGE_STORAGE_URI)))
+OCR_HTTP_ENDPOINT ?=
+OCR_INFER_PROTOCOL ?= http
+OCR_MODEL_NAME ?= scene_text_ensemble
+YOLOX_HTTP_ENDPOINT ?=
+YOLOX_INFER_PROTOCOL ?= http
+YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT ?=
+YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL ?= http
+YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT ?=
+YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL ?= http
+VLM_CAPTION_ENDPOINT ?=
+VLM_CAPTION_MODEL_NAME ?= nvidia/NVIDIA-Nemotron-Nano-12B-v2
+NEMOTRON_PARSE_HTTP_ENDPOINT ?=
+NEMOTRON_PARSE_INFER_PROTOCOL ?= http
+NEMOTRON_PARSE_MODEL_NAME ?= nvidia/nemotron-parse
 MINIO_BUCKET ?= nv-ingest
 URL_INGEST_SOURCE_NODE ?= daedalus-01
 NVIDIA_INGEST_SHARDS ?= 8
 MAX_PARALLEL_INGEST_SHARDS ?= 1
+URL_INGEST_GLOBAL_CAPACITY ?= 1
 INGEST_JOB_DEADLINE_SECONDS ?= 21600
 INGEST_WAIT_TIMEOUT_SECONDS ?= 22200
 URL_INGEST_RUNNING_GRACE_SECONDS ?= 86400
@@ -105,7 +138,7 @@ ALLOW_NV_INGEST_DEPLOY_DURING_INGEST ?= false
 CHECK_CONSUMER ?= true
 CONSUMER_RETRIES ?= 2
 
-SUPPORTED_COMPONENTS := milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
+SUPPORTED_COMPONENTS := hindsight milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
 COMPONENTS ?= $(SUPPORTED_COMPONENTS)
 UNKNOWN_COMPONENTS := $(filter-out $(SUPPORTED_COMPONENTS),$(COMPONENTS))
 
@@ -116,35 +149,37 @@ endif
 .PHONY: help doctor show-config require-context \
 	images-validate images-build images-push images-release-refs images-publish \
 	compose-config compose-build compose-push compose-release-refs compose-publish \
-	preflight validate validate-local validate-cluster validate-ha render-agent-env deploy update redeploy \
+	preflight validate validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy \
+	verify-shared-secrets migrate-legacy-secrets migrate-hindsight enable-schedules enable-external-mcp cleanup-legacy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
-	deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
-	update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
-	redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
-	health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
+	deploy-hindsight deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
+	update-hindsight update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
+	redeploy-hindsight redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
+	health-provider-hindsight health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
 	health-provider-url-ingest health-provider-k8s-mcp health-provider-unifi-mcp \
-	health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
+	health-dependencies-hindsight health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
 	health-dependencies-pdf-server health-dependencies-url-ingest health-dependencies-k8s-mcp health-dependencies-unifi-mcp \
-	health-integration-milvus health-integration-retriever health-integration-nv-ingest health-integration-pdf-server \
+	health-integration-hindsight health-integration-milvus health-integration-retriever health-integration-nv-ingest health-integration-pdf-server \
 	health-integration-url-ingest health-integration-k8s-mcp health-integration-unifi-mcp \
-	healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server healthcheck-url-ingest \
+	healthcheck-hindsight healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server healthcheck-url-ingest \
 	healthcheck-k8s-mcp healthcheck-unifi-mcp
 
-CLUSTER_TARGETS := preflight validate validate-cluster deploy update redeploy \
+CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update redeploy \
+	verify-shared-secrets migrate-legacy-secrets migrate-hindsight enable-schedules enable-external-mcp cleanup-legacy \
 	health-provider health-dependencies health-integration health-stack healthcheck healthcheck-agent \
 	publish-corpus stage-data seed-data run-ingest \
-	deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
-	update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
-	redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
-	health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
+	deploy-hindsight deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
+	update-hindsight update-milvus update-retriever update-nv-ingest update-pdf-server update-url-ingest update-k8s-mcp update-unifi-mcp \
+	redeploy-hindsight redeploy-milvus redeploy-retriever redeploy-nv-ingest redeploy-pdf-server redeploy-url-ingest redeploy-k8s-mcp redeploy-unifi-mcp \
+	health-provider-hindsight health-provider-milvus health-provider-retriever health-provider-nv-ingest health-provider-pdf-server \
 	health-provider-url-ingest health-provider-k8s-mcp health-provider-unifi-mcp \
-	health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
+	health-dependencies-hindsight health-dependencies-milvus health-dependencies-retriever health-dependencies-nv-ingest \
 	health-dependencies-pdf-server health-dependencies-url-ingest health-dependencies-k8s-mcp \
-	health-dependencies-unifi-mcp health-integration-milvus health-integration-retriever \
+	health-dependencies-unifi-mcp health-integration-hindsight health-integration-milvus health-integration-retriever \
 	health-integration-nv-ingest health-integration-pdf-server health-integration-url-ingest \
 	health-integration-k8s-mcp health-integration-unifi-mcp \
-	healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server \
+	healthcheck-hindsight healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server \
 	healthcheck-url-ingest healthcheck-k8s-mcp healthcheck-unifi-mcp
 
 $(CLUSTER_TARGETS): | require-context
@@ -165,18 +200,17 @@ help: ## [read-only] Show supported workflows and their side effects.
 	  'Required for every Kubernetes target: EXPECTED_CONTEXT=<approved literal context>' \
 	  'Select components with: COMPONENTS="milvus retriever nv-ingest"' \
 	  'Skip consumer probes before Daedalus exists with: CHECK_CONSUMER=false' \
-	  'Use STACK_NAMESPACE only for a reviewed namespace and PVC migration.'
+	  'All releases use DAEDALUS_NAMESPACE=daedalus by default.'
 
 doctor: ## [read-only cluster] Check tools, exported configuration, context, and cluster access.
 	@[[ -f "$(ENV_FILE)" ]] || { \
 	  echo "Missing $(ENV_FILE). Copy .env.example, edit it, then source it with export enabled." >&2; exit 1; \
 	}
 	@bash -n "$(ENV_FILE)"
-	@for command in bash python3 "$(JQ)" "$(KUBECTL)" "$(HELM)" docker; do \
+	@for command in bash python3 "$(JQ)" "$(KUBECTL)" "$(HELM)"; do \
 	  command -v "$$command" >/dev/null || { echo "Missing required command: $$command" >&2; exit 1; }; \
 	done
-	@$(MAKE) --version | head -n 1 | grep -Fq 'GNU Make' || { echo 'GNU Make is required.' >&2; exit 1; }
-	@$(COMPOSE) version >/dev/null
+	@[[ -n "$(MAKE_VERSION)" ]] || { echo 'GNU Make is required.' >&2; exit 1; }
 	@[[ -n "$(K8S_MCP_IMAGE)" && -n "$(URL_INGEST_IMAGE)" ]] || { \
 	  echo 'Root .env values are not exported to Make. Run: set -a; source .env; set +a' >&2; exit 1; \
 	}
@@ -195,6 +229,8 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 	  'minio storage class' '$(MINIO_STORAGE_CLASS)' \
 	  'etcd storage class' '$(ETCD_STORAGE_CLASS)' \
 	  'workspace image version' '$(DAEDALUS_CONTEXT_IMAGE_VERSION)' \
+	  'hindsight repository' '$(HINDSIGHT_ROOT)' \
+	  'hindsight API' '$(HINDSIGHT_API_URL)' \
 	  'nv-ingest version' '$(NV_INGEST_VERSION)' \
 	  'nv-ingest namespace' '$(NV_INGEST_NAMESPACE)' \
 	  'retriever namespace' '$(RETRIEVER_NAMESPACE)' \
@@ -203,6 +239,8 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 	  'daedalus reranker API' '$(DAEDALUS_RERANKER_ENDPOINT)' \
 	  'NIM reranker API' '$(NIM_RERANKER_ENDPOINT)' \
 	  'NVIDIA ingest shards' '$(NVIDIA_INGEST_SHARDS)' \
+	  'manual shard parallelism' '$(MAX_PARALLEL_INGEST_SHARDS)' \
+	  'scheduled ingest capacity' '$(URL_INGEST_GLOBAL_CAPACITY)' \
 	  'seed source node' '$(URL_INGEST_SOURCE_NODE)' \
 	  'pdf-server namespace' '$(PDF_SERVER_NAMESPACE)' \
 	  'url-ingest namespace' '$(URL_INGEST_NAMESPACE)' \
@@ -276,6 +314,24 @@ require-context:
 preflight: ## [read-only cluster] Verify the guarded context and cluster access.
 	@$(KUBECTL) cluster-info >/dev/null
 
+verify-shared-secrets: preflight ## [read-only cluster] Verify externally managed Secrets required by all charts.
+	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
+	  bash "$(ROOT_DIR)/scripts/check-shared-secrets.sh"
+
+migrate-legacy-secrets: preflight ## [cluster write] Copy legacy provider Secrets into daedalus without exposing values.
+	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" JQ="$(JQ)" \
+	  bash "$(ROOT_DIR)/scripts/migrate-legacy-secrets.sh"
+
+migrate-hindsight: preflight ## [cluster/data write] Copy Hindsight into daedalus and verify the cutover fingerprints.
+	@[[ -d "$(HINDSIGHT_ROOT)" ]] || { echo "Missing Hindsight repository: $(HINDSIGHT_ROOT)" >&2; exit 1; }
+	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" migrate-namespace \
+	  NAMESPACE="$(DAEDALUS_NAMESPACE)" EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)"
+
+cleanup-legacy: preflight ## [destructive] Remove accepted legacy namespaces, RBAC, retained PVs, and exact local paths.
+	@KUBECTL="$(KUBECTL)" HELM="$(HELM)" \
+	  CONFIRM_LEGACY_CLEANUP="$(CONFIRM_LEGACY_CLEANUP)" \
+	  bash "$(ROOT_DIR)/scripts/cleanup-legacy-stack.sh"
+
 define run_components
 	@for component in $(COMPONENTS); do \
 	  printf '\n==> %s %s\n' '$(1)' "$$component"; \
@@ -306,8 +362,30 @@ define check_components
 	printf '\n%s summary: PASS (%s/%s)\n' '$(1)' "$$total" "$$total"
 endef
 
-deploy: preflight ## [cluster write] Reconcile selected components without forcing restarts.
+deploy: ## [cluster write] Load configuration, validate, reconcile, and check selected components.
+	@[[ -f "$(ENV_FILE)" ]] || { \
+	  echo "Missing $(ENV_FILE). Copy .env.example and edit it before deployment." >&2; exit 1; \
+	}
+	@bash -n "$(ENV_FILE)"
+	@set -a; \
+	  source "$(ENV_FILE)"; \
+	  set +a; \
+	  $(MAKE) --no-print-directory deploy-workflow
+
+deploy-workflow:
+	@$(MAKE) --no-print-directory doctor
+	@$(MAKE) --no-print-directory show-config
+	@$(MAKE) --no-print-directory validate-cluster
+	@$(MAKE) --no-print-directory verify-shared-secrets
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action deploy --components $(COMPONENTS)
+	@$(MAKE) --no-print-directory health-provider
+
+enable-schedules: preflight ## [cluster write] Enable URL ingestion schedules after corpus acceptance.
+	@$(MAKE) --no-print-directory deploy-url-ingest URL_INGEST_SUSPEND=false
+
+enable-external-mcp: preflight ## [cluster write] Enable authenticated MCP NodePorts after internal acceptance.
+	@$(MAKE) --no-print-directory deploy-k8s-mcp MCP_EXTERNAL_ENABLED=true
+	@$(MAKE) --no-print-directory deploy-unifi-mcp MCP_EXTERNAL_ENABLED=true
 
 update: preflight ## [cluster write] Reconcile selected already-published release images.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action update --components $(COMPONENTS)
@@ -338,6 +416,11 @@ healthcheck-agent:
 
 # Deployment -----------------------------------------------------------------
 
+deploy-hindsight:
+	@[[ -d "$(HINDSIGHT_ROOT)" ]] || { echo "Missing Hindsight repository: $(HINDSIGHT_ROOT)" >&2; exit 1; }
+	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" deploy \
+	  NAMESPACE="$(DAEDALUS_NAMESPACE)" EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)"
+
 deploy-retriever:
 	@values_args=(); \
 	if [[ -n "$(RETRIEVER_VALUES_FILE)" ]]; then \
@@ -349,7 +432,8 @@ deploy-retriever:
 	$(HELM) upgrade --install "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
 	  --namespace "$(RETRIEVER_NAMESPACE)" --create-namespace \
 	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" \
-	  "$${values_args[@]}" --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
+	  "$${values_args[@]}" --atomic --wait --history-max 10 \
+	  --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
 	for deployment in "$(RETRIEVER_FULLNAME)-embedder" "$(RETRIEVER_FULLNAME)-reranker"; do \
 	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status "deployment/$$deployment" \
 	    --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
@@ -367,72 +451,123 @@ deploy-retriever:
 	fi
 
 deploy-milvus:
-	@cd "$(ROOT_DIR)/nim-milvus-ms" && \
-	  NAMESPACE="$(MILVUS_NAMESPACE)" RELEASE_NAME="$(MILVUS_RELEASE)" \
-	  MINIO_SECRET_NAME="$(MILVUS_MINIO_SECRET_NAME)" \
-	  MILVUS_ROOT_SECRET_NAME="$(MILVUS_ROOT_SECRET_NAME)" \
-	  $(if $(strip $(MINIO_STORAGE_CLASS)),MINIO_STORAGE_CLASS="$(MINIO_STORAGE_CLASS)",) \
-	  ETCD_STORAGE_CLASS="$(ETCD_STORAGE_CLASS)" \
-	  EXPOSE_NODEPORTS="$(EXPOSE_NODEPORTS)" ENABLE_MONITORING="$(ENABLE_MILVUS_MONITORING)" \
-	  HELM_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+	@[[ -n "$(MINIO_STORAGE_CLASS)" ]] || { echo 'MINIO_STORAGE_CLASS is required.' >&2; exit 1; }
+	@$(HELM) upgrade --install "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" \
+	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	  --set-string milvus.minio.persistence.storageClass="$(MINIO_STORAGE_CLASS)" \
+	  --set-string milvus.etcd.persistence.storageClass="$(ETCD_STORAGE_CLASS)" \
+	  --set milvus.metrics.serviceMonitor.enabled="$(ENABLE_MILVUS_MONITORING)" \
+	  --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
 
 deploy-nv-ingest:
-	@cd "$(ROOT_DIR)/nv-ingest" && \
-	  NAMESPACE="$(NV_INGEST_NAMESPACE)" RELEASE_NAME="$(NV_INGEST_RELEASE)" \
-	  MILVUS_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  HELM_TIMEOUT="$(ROLLOUT_TIMEOUT)" \
-	  NV_INGEST_CHART_URL="https://helm.ngc.nvidia.com/nvidia/nemo-microservices/charts/nv-ingest-$(NV_INGEST_VERSION).tgz" \
-	  NV_INGEST_IMAGE_TAG="$(NV_INGEST_VERSION)" \
-	  MILVUS_ENDPOINT="$(MILVUS_ENDPOINT)" \
-	  MINIO_INTERNAL_ADDRESS="$(MINIO_ENDPOINT)" MINIO_PUBLIC_ADDRESS="$(MINIO_ENDPOINT)" \
-	  MINIO_BUCKET="$(MINIO_BUCKET)" MINIO_SOURCE_SECRET_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  MINIO_SOURCE_SECRET_NAME="$(MILVUS_MINIO_SECRET_NAME)" \
-	  EMBEDDING_NIM_ENDPOINT="$(EMBEDDING_NIM_ENDPOINT)" \
-	  EMBEDDING_NIM_MODEL_NAME="$(EMBEDDING_NIM_MODEL_NAME)" \
-	  NV_INGEST_REPLICA_COUNT="$(NV_INGEST_REPLICA_COUNT)" \
-	  $(if $(strip $(NV_INGEST_IMAGE_STORAGE_URI)),IMAGE_STORAGE_URI="$(NV_INGEST_IMAGE_STORAGE_URI)",) \
-	  URL_INGEST_NAMESPACE="$(URL_INGEST_NAMESPACE)" \
-	  ALLOW_DEPLOY_DURING_INGEST="$(ALLOW_NV_INGEST_DEPLOY_DURING_INGEST)" \
-	  NV_INGEST_SERVICE_TYPE="$(NV_INGEST_SERVICE_TYPE)" NV_INGEST_NODE_PORT="$(NV_INGEST_NODE_PORT)" \
-	  COMPONENTS_TO_READY_CHECK="$(NV_INGEST_COMPONENTS_TO_READY_CHECK)" bash deploy.sh
+	@[[ -n "$(EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI)" ]] || { \
+	  echo 'IMAGE_STORAGE_URI is required for NV-Ingest.' >&2; exit 1; \
+	}
+	@for variable in OCR_HTTP_ENDPOINT YOLOX_HTTP_ENDPOINT \
+	  YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT \
+	  VLM_CAPTION_ENDPOINT NEMOTRON_PARSE_HTTP_ENDPOINT; do \
+	  [[ -n "$${!variable}" ]] || { \
+	    echo "$$variable is required for NV-Ingest; no in-cluster fallback is deployed." >&2; \
+	    exit 1; \
+	  }; \
+	done
+	@$(HELM) upgrade --install "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" \
+	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	  --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" \
+	  --set-string nv-ingest.image.tag="$(NV_INGEST_VERSION)" \
+	  --set nv-ingest.replicaCount="$(NV_INGEST_REPLICA_COUNT)" \
+	  --set-string nv-ingest.envVars.MILVUS_ENDPOINT="$(MILVUS_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.MINIO_INTERNAL_ADDRESS="$(MINIO_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.MINIO_PUBLIC_ADDRESS="$(MINIO_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.MINIO_BUCKET="$(MINIO_BUCKET)" \
+	  --set-string nv-ingest.envVars.EMBEDDING_NIM_ENDPOINT="$(EMBEDDING_NIM_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.EMBEDDING_NIM_MODEL_NAME="$(EMBEDDING_NIM_MODEL_NAME)" \
+	  --set-string nv-ingest.envVars.OCR_HTTP_ENDPOINT="$(OCR_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.OCR_INFER_PROTOCOL="$(OCR_INFER_PROTOCOL)" \
+	  --set-string nv-ingest.envVars.OCR_MODEL_NAME="$(OCR_MODEL_NAME)" \
+	  --set-string nv-ingest.envVars.YOLOX_HTTP_ENDPOINT="$(YOLOX_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_INFER_PROTOCOL="$(YOLOX_INFER_PROTOCOL)" \
+	  --set-string nv-ingest.envVars.YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT="$(YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL="$(YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL)" \
+	  --set-string nv-ingest.envVars.YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT="$(YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL="$(YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL)" \
+	  --set-string nv-ingest.envVars.VLM_CAPTION_ENDPOINT="$(VLM_CAPTION_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.VLM_CAPTION_MODEL_NAME="$(VLM_CAPTION_MODEL_NAME)" \
+	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_HTTP_ENDPOINT="$(NEMOTRON_PARSE_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_INFER_PROTOCOL="$(NEMOTRON_PARSE_INFER_PROTOCOL)" \
+	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_MODEL_NAME="$(NEMOTRON_PARSE_MODEL_NAME)" \
+	  --set-string nv-ingest.envVars.IMAGE_STORAGE_URI="$(EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI)" \
+	  --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
 
 deploy-pdf-server:
-	@cd "$(ROOT_DIR)/pdf-server" && \
-	  TARGET=kubernetes NAMESPACE="$(PDF_SERVER_NAMESPACE)" \
-	  AGENT_NAMESPACE="$(AGENT_NAMESPACE)" URL_INGEST_NAMESPACE="$(URL_INGEST_NAMESPACE)" \
-	  PDF_SERVER_IMAGE="$(PDF_SERVER_IMAGE)" PDF_STORAGE_CLASS="$(PDF_STORAGE_CLASS)" \
-	  PDF_STORAGE_SIZE="$(PDF_STORAGE_SIZE)" \
-	  ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+	@image='$(PDF_SERVER_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; \
+	  $(HELM) upgrade --install pdf-server "$(PDF_SERVER_CHART)" \
+	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
+	    --set-string persistence.storageClass="$(PDF_STORAGE_CLASS)" \
+	    --set-string persistence.size="$(PDF_STORAGE_SIZE)" \
+	    --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
 
 deploy-url-ingest:
-	@cd "$(ROOT_DIR)/url-ingest" && \
-	  NAMESPACE="$(URL_INGEST_NAMESPACE)" MILVUS_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  NV_INGEST_NAMESPACE="$(NV_INGEST_NAMESPACE)" ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" \
-	  MILVUS_SERVICE="$(MILVUS_SERVICE)" MINIO_SERVICE="$(MINIO_SERVICE)" \
-	  NV_INGEST_SERVICE="$(NV_INGEST_SERVICE)" MILVUS_URI="$(MILVUS_ENDPOINT)" \
-	  MINIO_ENDPOINT="$(MINIO_INGEST_ENDPOINT)" MINIO_BUCKET="$(MINIO_BUCKET)" \
-	  NV_INGEST_MESSAGE_HOST="$(NV_INGEST_MESSAGE_HOST)" NV_INGEST_MESSAGE_PORT="$(NV_INGEST_MESSAGE_PORT)" \
-	  NV_INGEST_VERSION="$(NV_INGEST_VERSION)" MINIO_SOURCE_SECRET_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  MINIO_SOURCE_SECRET_NAME="$(MILVUS_MINIO_SECRET_NAME)" \
-	  MILVUS_ROOT_SECRET_NAME="$(MILVUS_ROOT_SECRET_NAME)" URL_INGEST_SOURCE_NODE="$(URL_INGEST_SOURCE_NODE)" \
-	  bash k8s/deploy.sh
+	@$(HELM) upgrade --install url-ingest "$(URL_INGEST_CHART)" \
+	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	  --set-string images.crawler="$(URL_INGEST_IMAGE)" \
+	  --set-string images.runner="$(URL_INGEST_RUNNER_IMAGE)" \
+	  --set schedules.suspend="$(URL_INGEST_SUSPEND)" \
+	  --set ingestion.globalCapacity="$(URL_INGEST_GLOBAL_CAPACITY)" \
+	  --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
+	  --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" \
+	  --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
 
 deploy-k8s-mcp:
-	@cd "$(ROOT_DIR)/k8s-multicluster-mcp" && \
-	  K8S_MCP_NAMESPACE="$(K8S_MCP_NAMESPACE)" BUILD_IMAGE=false PUSH_IMAGE=false \
-	  K8S_MCP_NODE_PORT="$(K8S_MCP_NODE_PORT)" \
-	  MCP_EXTERNAL_CLIENT_CIDR="$(MCP_EXTERNAL_CLIENT_CIDR)" \
-	  ROLLOUT_RESTART=false ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+	@image='$(K8S_MCP_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; external_args=(); helm_args=(); \
+	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
+	    external_args+=(--set-string 'service.external.sourceRanges[0]=$(MCP_EXTERNAL_CLIENT_CIDR)'); \
+	  else \
+	    helm_args+=(--atomic --wait); \
+	  fi; \
+	  $(HELM) upgrade --install k8s-mcp-server "$(K8S_MCP_CHART)" \
+	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
+	    --set service.external.enabled="$(MCP_EXTERNAL_ENABLED)" \
+	    --set service.external.nodePort="$(K8S_MCP_NODE_PORT)" "$${external_args[@]}" \
+	    "$${helm_args[@]}" --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"; \
+	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
+	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" rollout status \
+	      deployment/k8s-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"; \
+	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" get service/k8s-mcp-server -o json | \
+	      python3 "$(ROOT_DIR)/scripts/verify-external-mcp-service.py" \
+	        --node-port "$(K8S_MCP_NODE_PORT)" --source-range "$(MCP_EXTERNAL_CLIENT_CIDR)"; \
+	  fi
 
 deploy-unifi-mcp:
-	@cd "$(ROOT_DIR)/unifi-network-mcp" && \
-	  UNIFI_MCP_NAMESPACE="$(UNIFI_MCP_NAMESPACE)" BUILD_IMAGE=false PUSH_IMAGE=false \
-	  UNIFI_MCP_NODE_PORT="$(UNIFI_MCP_NODE_PORT)" \
-	  MCP_EXTERNAL_CLIENT_CIDR="$(MCP_EXTERNAL_CLIENT_CIDR)" \
-	  ROLLOUT_RESTART=false ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+	@image='$(UNIFI_MCP_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; external_args=(); helm_args=(); \
+	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
+	    external_args+=(--set-string 'service.external.sourceRanges[0]=$(MCP_EXTERNAL_CLIENT_CIDR)'); \
+	  else \
+	    helm_args+=(--atomic --wait); \
+	  fi; \
+	  $(HELM) upgrade --install unifi-network-mcp-server "$(UNIFI_MCP_CHART)" \
+	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
+	    --set-string controller.baseUrl="$(UNIFI_BASE_URL)" \
+	    --set controller.insecureSkipVerify="$(UNIFI_INSECURE_SKIP_VERIFY)" \
+	    --set-string controller.cidr="$(UNIFI_CONTROLLER_CIDR)" \
+	    --set service.external.enabled="$(MCP_EXTERNAL_ENABLED)" \
+	    --set service.external.nodePort="$(UNIFI_MCP_NODE_PORT)" "$${external_args[@]}" \
+	    "$${helm_args[@]}" --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"; \
+	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
+	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" rollout status \
+	      deployment/unifi-network-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"; \
+	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" get \
+	      service/unifi-network-mcp-server -o json | \
+	      python3 "$(ROOT_DIR)/scripts/verify-external-mcp-service.py" \
+	        --node-port "$(UNIFI_MCP_NODE_PORT)" --source-range "$(MCP_EXTERNAL_CLIENT_CIDR)"; \
+	  fi
 
 # Updates --------------------------------------------------------------------
 
+update-hindsight: deploy-hindsight
 update-milvus: deploy-milvus
 update-retriever: deploy-retriever
 update-nv-ingest: deploy-nv-ingest
@@ -441,19 +576,12 @@ update-url-ingest: deploy-url-ingest
 update-pdf-server: deploy-pdf-server
 	@$(MAKE) --no-print-directory redeploy-pdf-server
 
-update-k8s-mcp:
-	@cd "$(ROOT_DIR)/k8s-multicluster-mcp" && \
-	  K8S_MCP_NAMESPACE="$(K8S_MCP_NAMESPACE)" \
-	  BUILD_IMAGE="$(UPDATE_BUILD_IMAGES)" PUSH_IMAGE="$(UPDATE_PUSH_IMAGES)" \
-	  ROLLOUT_RESTART=false ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
-
-update-unifi-mcp:
-	@cd "$(ROOT_DIR)/unifi-network-mcp" && \
-	  UNIFI_MCP_NAMESPACE="$(UNIFI_MCP_NAMESPACE)" \
-	  BUILD_IMAGE="$(UPDATE_BUILD_IMAGES)" PUSH_IMAGE="$(UPDATE_PUSH_IMAGES)" \
-	  ROLLOUT_RESTART=false ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+update-k8s-mcp: deploy-k8s-mcp
+update-unifi-mcp: deploy-unifi-mcp
 
 # Restarts -------------------------------------------------------------------
+
+redeploy-hindsight: deploy-hindsight
 
 redeploy-milvus:
 	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout restart statefulset --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)"
@@ -641,6 +769,20 @@ define report_milvus_collections
 	fi
 endef
 
+health-provider-hindsight:
+	@$(HELM) --namespace="$(DAEDALUS_NAMESPACE)" status "$(HINDSIGHT_RELEASE)" >/dev/null
+	@$(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" rollout status statefulset/hindsight-postgresql --timeout="$(ROLLOUT_TIMEOUT)"
+	@$(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" rollout status deployment/hindsight-api --timeout="$(ROLLOUT_TIMEOUT)"
+	@$(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" rollout status deployment/hindsight-control-plane --timeout="$(ROLLOUT_TIMEOUT)"
+
+health-dependencies-hindsight:
+	@[[ -d "$(HINDSIGHT_ROOT)" ]] || { echo "Missing Hindsight repository: $(HINDSIGHT_ROOT)" >&2; exit 1; }
+	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" health \
+	  NAMESPACE="$(DAEDALUS_NAMESPACE)" EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)"
+
+health-integration-hindsight:
+	$(call consumer_http,$(HINDSIGHT_API_URL)/health)
+
 health-provider-milvus:
 	@$(HELM) --namespace="$(MILVUS_NAMESPACE)" status "$(MILVUS_RELEASE)" >/dev/null
 	$(call assert_nonempty_resources,$(MILVUS_NAMESPACE),deployment,app.kubernetes.io/instance=$(MILVUS_RELEASE))
@@ -649,7 +791,8 @@ health-provider-milvus:
 	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status deployment --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
 	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status statefulset --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
 	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status statefulset --selector="release=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
-	$(call assert_bound_pvcs,$(MILVUS_NAMESPACE),daedalus.nvidia.com/milvus-storage=true$(comma)app.kubernetes.io/instance=$(MILVUS_RELEASE))
+	$(call assert_bound_pvcs,$(MILVUS_NAMESPACE),app.kubernetes.io/instance=$(MILVUS_RELEASE))
+	$(call assert_bound_pvcs,$(MILVUS_NAMESPACE),release=$(MILVUS_RELEASE))
 
 health-dependencies-milvus:
 	@$(KUBECTL) get --raw "/api/v1/namespaces/$(MILVUS_NAMESPACE)/services/http:$(MILVUS_SERVICE):9091/proxy/healthz" >/dev/null
@@ -712,6 +855,7 @@ health-integration-nv-ingest:
 	$(call consumer_http,$(NV_INGEST_ENDPOINT)/v1/health/ready)
 
 health-provider-pdf-server:
+	@$(HELM) --namespace="$(DAEDALUS_NAMESPACE)" status pdf-server >/dev/null
 	@$(KUBECTL) --namespace="$(PDF_SERVER_NAMESPACE)" rollout status deployment/pdf-server --timeout="$(ROLLOUT_TIMEOUT)"
 	$(call assert_bound_pvcs,$(PDF_SERVER_NAMESPACE),app.kubernetes.io/name=pdf-server)
 
@@ -732,6 +876,7 @@ health-integration-pdf-server:
 	$(call consumer_http,http://pdf-server.$(PDF_SERVER_NAMESPACE).svc.cluster.local/pdfs/)
 
 health-provider-url-ingest:
+	@$(HELM) --namespace="$(DAEDALUS_NAMESPACE)" status url-ingest >/dev/null
 	$(call assert_bound_pvcs,$(URL_INGEST_NAMESPACE),app.kubernetes.io/name=url-ingest)
 	$(call assert_resource_count,$(URL_INGEST_NAMESPACE),cronjob,app.kubernetes.io/name=url-ingest,5)
 
@@ -744,8 +889,11 @@ health-integration-url-ingest:
 	@echo "SKIP: url-ingest is a batch component; use run verification rather than a serving probe."
 
 health-provider-k8s-mcp:
+	@$(HELM) --namespace="$(DAEDALUS_NAMESPACE)" status k8s-mcp-server >/dev/null
 	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" rollout status deployment/k8s-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
-	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" wait --for=condition=Ready pod --selector=app=k8s-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
+	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" wait --for=condition=Ready pod \
+	  --selector=app.kubernetes.io/name=k8s-mcp-server,app.kubernetes.io/instance=k8s-mcp-server \
+	  --timeout="$(ROLLOUT_TIMEOUT)"
 	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" exec deployment/k8s-mcp-server -- \
 	  curl --fail --silent --show-error http://127.0.0.1:8080/livez >/dev/null
 
@@ -760,8 +908,11 @@ health-integration-k8s-mcp:
 	    MCP_TOKEN_ENV=KUBERNETES_MCP_TOKEN python3 - < "$(ROOT_DIR)/scripts/check_mcp_contract.py"
 
 health-provider-unifi-mcp:
+	@$(HELM) --namespace="$(DAEDALUS_NAMESPACE)" status unifi-network-mcp-server >/dev/null
 	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" rollout status deployment/unifi-network-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
-	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" wait --for=condition=Ready pod --selector=app=unifi-network-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
+	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" wait --for=condition=Ready pod \
+	  --selector=app.kubernetes.io/name=unifi-network-mcp-server,app.kubernetes.io/instance=unifi-network-mcp-server \
+	  --timeout="$(ROLLOUT_TIMEOUT)"
 	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" exec deployment/unifi-network-mcp-server -- \
 	  curl --fail --silent --show-error http://127.0.0.1:8080/livez >/dev/null
 
@@ -775,6 +926,7 @@ health-integration-unifi-mcp:
 	  env MCP_URL="http://unifi-network-mcp-server.$(UNIFI_MCP_NAMESPACE).svc.cluster.local:8080/mcp" \
 	    MCP_TOKEN_ENV=UNIFI_MCP_TOKEN python3 - < "$(ROOT_DIR)/scripts/check_mcp_contract.py"
 
+healthcheck-hindsight: health-provider-hindsight health-dependencies-hindsight $(if $(filter true,$(CHECK_CONSUMER)),health-integration-hindsight)
 healthcheck-milvus: health-provider-milvus health-dependencies-milvus $(if $(filter true,$(CHECK_CONSUMER)),health-integration-milvus)
 healthcheck-retriever: health-provider-retriever health-dependencies-retriever $(if $(filter true,$(CHECK_CONSUMER)),health-integration-retriever)
 healthcheck-nv-ingest: health-provider-nv-ingest health-dependencies-nv-ingest $(if $(filter true,$(CHECK_CONSUMER)),health-integration-nv-ingest)
@@ -787,7 +939,7 @@ healthcheck-unifi-mcp: health-provider-unifi-mcp health-dependencies-unifi-mcp $
 
 publish-corpus: preflight ## [data write] Publish and atomically select a PDF corpus generation.
 	@cd "$(ROOT_DIR)/pdf-server" && \
-	  TARGET=kubernetes NAMESPACE="$(PDF_SERVER_NAMESPACE)" PUBLISH_CORPUS=true \
+	  TARGET=kubernetes NAMESPACE="$(PDF_SERVER_NAMESPACE)" PUBLISH_CORPUS=true PUBLISH_ONLY=true \
 	  AGENT_NAMESPACE="$(AGENT_NAMESPACE)" URL_INGEST_NAMESPACE="$(URL_INGEST_NAMESPACE)" \
 	  PDF_SERVER_IMAGE="$(PDF_SERVER_IMAGE)" PDF_STORAGE_CLASS="$(PDF_STORAGE_CLASS)" \
 	  PDF_STORAGE_SIZE="$(PDF_STORAGE_SIZE)" PDF_SOURCE_HOST_PATH="$(PDF_SOURCE_HOST_PATH)" \
@@ -809,7 +961,7 @@ define run_ingest_operation
 	  MAX_PARALLEL_INGEST_SHARDS="$(MAX_PARALLEL_INGEST_SHARDS)" \
 	  INGEST_JOB_DEADLINE_SECONDS="$(INGEST_JOB_DEADLINE_SECONDS)" \
 	  INGEST_WAIT_TIMEOUT_SECONDS="$(INGEST_WAIT_TIMEOUT_SECONDS)" \
-	  bash k8s/deploy.sh $(1)
+	  bash k8s/deploy.sh --data-only $(1)
 endef
 
 stage-data: publish-corpus ## [data write] Publish PDFs and stage URL inputs without ingesting them.
@@ -825,10 +977,9 @@ run-ingest: preflight ## [data write] Ingest staged data, wait, and verify selec
 
 validate: validate-local validate-cluster ## [read-only cluster] Run local checks and cluster dry-runs.
 
-validate-local: ## [read-only local] Run source tests and renders without cluster credentials.
+validate-helm: ## [read-only local] Validate topology contracts and all eight Helm releases.
 	@command -v python3 >/dev/null
 	@command -v "$(HELM)" >/dev/null
-	@$(MAKE) --no-print-directory images-validate
 	@"$(ROOT_DIR)/scripts/contextctl" validate --environment "$(ENVIRONMENT)"
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)" \
 	  --check "$(GENERATED_AGENT_ENV)"
@@ -836,10 +987,31 @@ validate-local: ## [read-only local] Run source tests and renders without cluste
 	  -s "$(ROOT_DIR)/scripts/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(RETRIEVER_CHART)/tests" >/dev/null
-	@$(HELM) lint "$(RETRIEVER_CHART)" --namespace "$(RETRIEVER_NAMESPACE)" --strict >/dev/null
-	@$(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
-	  --namespace validation-nondefault \
-	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" >/dev/null
+	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null
+	@for chart in "$(MILVUS_CHART)" "$(RETRIEVER_CHART)" "$(NV_INGEST_CHART)" \
+	  "$(PDF_SERVER_CHART)" "$(URL_INGEST_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
+	  $(HELM) lint "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null; \
+	done
+	@rendered="$$(mktemp)"; trap 'rm -f "$$rendered"' EXIT; \
+	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  $(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	    --values "$(RETRIEVER_VALUES_FILE)" >>"$$rendered"; \
+	  $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	    --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" >>"$$rendered"; \
+	  for chart in "$(PDF_SERVER_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
+	    $(HELM) template "$$(basename "$$chart")" "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  done; \
+	  $(HELM) template url-ingest "$(URL_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	    --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
+	    --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" >>"$$rendered"; \
+	  ! grep -Eq 'namespace: (milvus|nv-ingest|daedalus-retriever|k8s-mcp-server|unifi-network-mcp-server)$$' "$$rendered"
+	@bash -n "$(ROOT_DIR)/scripts/check-shared-secrets.sh" \
+	  "$(ROOT_DIR)/scripts/migrate-legacy-secrets.sh" \
+	  "$(ROOT_DIR)/scripts/cleanup-legacy-stack.sh"
+	@echo "Helm validation passed."
+
+validate-local: validate-helm ## [read-only local] Run full source, image, and chart validation.
+	@$(MAKE) --no-print-directory images-validate
 	@bash -n \
 	  "$(ROOT_DIR)/scripts/image-reference.sh" \
 	  "$(ROOT_DIR)/scripts/check_url_ingest_freshness.sh" \
@@ -850,26 +1022,6 @@ validate-local: ## [read-only local] Run source tests and renders without cluste
 	  "$(ROOT_DIR)/pdf-server/deploy.sh" \
 	  "$(ROOT_DIR)/url-ingest/k8s/deploy.sh" \
 	  "$(ROOT_DIR)/url-ingest/k8s/lib/job-control.sh"
-	@grep -Fq 'type: LoadBalancer' \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml"
-	@grep -Fq 'loadBalancerClass: daedalus.ai/nodeport-only' \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml"
-	@grep -Fq 'nodePort: __K8S_MCP_NODE_PORT__' \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml"
-	@grep -Fq 'loadBalancerSourceRanges:' \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml"
-	@grep -Fq -- '- __MCP_EXTERNAL_CLIENT_CIDR__' \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml"
-	@grep -Fq 'type: LoadBalancer' \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy/unifi-network-mcp-server.yaml"
-	@grep -Fq 'loadBalancerClass: daedalus.ai/nodeport-only' \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy/unifi-network-mcp-server.yaml"
-	@grep -Fq 'nodePort: __UNIFI_MCP_NODE_PORT__' \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy/unifi-network-mcp-server.yaml"
-	@grep -Fq 'loadBalancerSourceRanges:' \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy/unifi-network-mcp-server.yaml"
-	@grep -Fq -- '- __MCP_EXTERNAL_CLIENT_CIDR__' \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy/unifi-network-mcp-server.yaml"
 	@source "$(ROOT_DIR)/scripts/image-reference.sh"; \
 	  require_semver_image_ref "validation image" "example.invalid/service:v1.2.3-rc.1"; \
 	  ! require_semver_image_ref "validation image" "example.invalid/service:latest" >/dev/null 2>&1; \
@@ -903,72 +1055,25 @@ validate-ha: ## [read-only local] Require an approved numeric HA acceptance poli
 render-agent-env: ## [read-only local] Print generated Daedalus provider endpoints.
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)"
 
-validate-cluster: preflight validate-local ## [read-only cluster] Validate active manifests with dry-runs.
+validate-cluster: preflight validate-helm ## [read-only cluster] Validate Helm manifests with Kubernetes client dry-runs.
 	@KUBECTL="$(KUBECTL)" PYTHONDONTWRITEBYTECODE=1 \
 	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py"
-	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-	  -s "$(RETRIEVER_CHART)/tests" >/dev/null
-	@$(HELM) lint "$(RETRIEVER_CHART)" --namespace "$(RETRIEVER_NAMESPACE)" --strict >/dev/null
+	@$(HELM) template "$(HINDSIGHT_RELEASE)" "$(HINDSIGHT_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
+	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
+	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
+	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
 	@$(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
-	  --namespace "$(RETRIEVER_NAMESPACE)" \
-	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" | \
-	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@bash -n \
-	  "$(ROOT_DIR)/scripts/image-reference.sh" \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy.sh" \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy.sh" \
-	  "$(ROOT_DIR)/nim-milvus-ms/deploy.sh" \
-	  "$(ROOT_DIR)/nv-ingest/deploy.sh" \
-	  "$(ROOT_DIR)/pdf-server/deploy.sh" \
-	  "$(ROOT_DIR)/url-ingest/k8s/deploy.sh" \
-	  "$(ROOT_DIR)/url-ingest/k8s/lib/job-control.sh"
-	@python3 -m py_compile \
-	  "$(ROOT_DIR)/url-ingest/nv-ingest-ms-tasks.py" \
-	  "$(ROOT_DIR)/url-ingest/k8s/render-manual-job.py"
-	@cd "$(ROOT_DIR)/url-ingest" && python3 -m unittest discover -s tests >/dev/null
-	@cd "$(ROOT_DIR)/nv-ingest" && bash tests/test-deploy.sh >/dev/null
-	@cd "$(ROOT_DIR)/nv-ingest" && \
-	  set -a; \
-	  [[ ! -f "$(ROOT_DIR)/.env" ]] || source "$(ROOT_DIR)/.env"; \
-	  [[ ! -f .env ]] || source .env; \
-	  set +a; \
-	  bash validate.sh >/dev/null
-	@MCP_AUTH_TOKEN=validation \
-	  K8S_MCP_IMAGE="example.invalid/k8s-mcp:0.0.0" \
-	  DRY_RUN=true BUILD_IMAGE=false PUSH_IMAGE=false \
-	  K8S_MCP_NAMESPACE="$(K8S_MCP_NAMESPACE)" bash "$(ROOT_DIR)/k8s-multicluster-mcp/deploy.sh" >/dev/null
-	@MCP_AUTH_TOKEN=validation \
-	  UNIFI_MCP_IMAGE="example.invalid/unifi-mcp:0.0.0" \
-	  DRY_RUN=true BUILD_IMAGE=false PUSH_IMAGE=false \
-	  UNIFI_MCP_NAMESPACE="$(UNIFI_MCP_NAMESPACE)" bash "$(ROOT_DIR)/unifi-network-mcp/deploy.sh" >/dev/null
-	@TARGET=kubernetes DRY_RUN=true NAMESPACE="$(PDF_SERVER_NAMESPACE)" \
-	  bash "$(ROOT_DIR)/pdf-server/deploy.sh" >/dev/null
-	@for manifest in serviceaccount.yaml pvc.yaml configmap-url-lists.yaml \
-	  cronjob-nvidia.yaml cronjob-kubernetes.yaml cronjob-vetpartner.yaml \
-	  cronjob-semianalysis.yaml cronjob-mentalhealth.yaml seed-data-job.yaml; do \
-	  sed "s/^\([[:space:]]*\)namespace: milvus$$/\1namespace: $(URL_INGEST_NAMESPACE)/" \
-	    "$(ROOT_DIR)/url-ingest/k8s/$$manifest" | \
-	    sed -e 's/__SOURCE_NODE__/$(URL_INGEST_SOURCE_NODE)/g' \
-	      -e 's/__PRUNE_STAGED_DATA__/true/g' | \
-	    $(KUBECTL) --namespace="$(URL_INGEST_NAMESPACE)" apply --dry-run=client -f - >/dev/null; \
+	  --namespace "$(DAEDALUS_NAMESPACE)" --values "$(RETRIEVER_VALUES_FILE)" | \
+	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
+	@$(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	  --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" | \
+	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
+	@for chart in "$(PDF_SERVER_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
+	  $(HELM) template "$$(basename "$$chart")" "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" | \
+	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null; \
 	done
-	@cd "$(ROOT_DIR)/url-ingest" && \
-	  rendered="$$(NAMESPACE="$(URL_INGEST_NAMESPACE)" MILVUS_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	    NV_INGEST_NAMESPACE="$(NV_INGEST_NAMESPACE)" MILVUS_SERVICE="$(MILVUS_SERVICE)" \
-	    MINIO_SERVICE="$(MINIO_SERVICE)" NV_INGEST_SERVICE="$(NV_INGEST_SERVICE)" \
-	    MILVUS_URI="$(MILVUS_ENDPOINT)" MINIO_ENDPOINT="$(MINIO_INGEST_ENDPOINT)" \
-	    MINIO_BUCKET="$(MINIO_BUCKET)" NV_INGEST_MESSAGE_HOST="$(NV_INGEST_MESSAGE_HOST)" \
-	    NV_INGEST_VERSION="$(NV_INGEST_VERSION)" URL_INGEST_SOURCE_NODE="$(URL_INGEST_SOURCE_NODE)" \
-	    URL_INGEST_IMAGE="example.invalid/url-ingest:0.0.0" \
-	    URL_INGEST_RUNNER_IMAGE="example.invalid/url-ingest-runner:0.0.0" \
-	    bash k8s/deploy.sh --render-only)"; \
-	  grep -q 'image: example.invalid/url-ingest:0.0.0' <<<"$$rendered"; \
-	  grep -q 'image: example.invalid/url-ingest-runner:0.0.0' <<<"$$rendered"; \
-	  ! grep -q '__URL_INGEST_IMAGE__' <<<"$$rendered"; \
-	  ! grep -q '__URL_INGEST_RUNNER_IMAGE__' <<<"$$rendered"; \
-	  grep -Fq 'value: $(MINIO_BUCKET)' <<<"$$rendered"; \
-	  [[ "$$(grep -c '^  suspend: false$$' <<<"$$rendered")" -eq 5 ]]; \
-	  printf '%s\n' "$$rendered" | $(KUBECTL) --namespace="$(URL_INGEST_NAMESPACE)" \
-	    apply --dry-run=client -f - >/dev/null
-	@cd "$(ROOT_DIR)/nim-milvus-ms" && NAMESPACE="$(MILVUS_NAMESPACE)" bash validate.sh >/dev/null
+	@$(HELM) template url-ingest "$(URL_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	  --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
+	  --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" | \
+	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
 	@echo "Validation passed."

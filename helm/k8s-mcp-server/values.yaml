@@ -1,0 +1,67 @@
+nameOverride: ""
+fullnameOverride: k8s-mcp-server
+replicaCount: 2
+image:
+  repository: daedalus.ddns.me:5050/btuttle/k8s-mcp-server
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+serviceAccount:
+  create: true
+  name: ""
+rbac:
+  create: true
+auth:
+  existingSecret: k8s-mcp-auth
+  tokenKey: token
+  nextTokenKey: next-token
+agent:
+  existingSecret: k8s-mcp-agent-config
+  baseUrlKey: base-url
+  apiKeyKey: api-key
+  modelKey: model
+service:
+  type: ClusterIP
+  port: 8080
+  external:
+    enabled: false
+    nodePort: 30080
+    loadBalancerClass: daedalus.ai/nodeport-only
+    sourceRanges: []
+resources:
+  requests: {memory: 512Mi, cpu: 500m}
+  limits: {memory: 8Gi, cpu: "4"}
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+networkPolicy:
+  enabled: true
+  externalHttpsFqdns:
+    - "*.nvidia.com"
+    - "*.amazonaws.com"
+    - "*.nvcf.nvidia.com"
+    - ghcr.io
+    - "*.ghcr.io"
+    - "*.docker.io"
+    - quay.io
+    - "*.quay.io"
+    - registry.k8s.io
+    - "*.registry.k8s.io"
+    - "*.pkg.dev"
+    - storage.googleapis.com
+    - "*.githubusercontent.com"
+    - "*.github.io"
+    - charts.helm.sh
+    - nvcr.io
+    - "*.nvcr.io"
+    - helm.ngc.nvidia.com
+nodeSelector: {}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [daedalus-06]
+tolerations: []

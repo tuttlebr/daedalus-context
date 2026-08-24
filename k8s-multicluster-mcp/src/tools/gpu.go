@@ -3,6 +3,7 @@ package tools
 
 import (
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tuttlebr/kubernetes-mcp-server/pkg/k8s"
 )
 
 // GetGPUClusterOverviewTool creates a tool for getting a comprehensive GPU status overview across the cluster.
@@ -58,8 +59,13 @@ func GetGPUOperatorHealthTool() mcp.Tool {
 			mcp.Description("Namespace where the NVIDIA GPU operator is deployed. Default: \"gpu-operator\"."),
 			mcp.DefaultString("gpu-operator")),
 		mcp.WithNumber("logLines",
-			mcp.Description("Number of recent log lines to retrieve from device plugin and operator pods. Default: 100."),
-			mcp.DefaultNumber(100)),
+			mcp.Description("Maximum number of log lines to retrieve per device plugin and operator pod within the time window. Default: 100."),
+			mcp.DefaultNumber(k8s.DefaultPodLogTailLines),
+			mcp.Min(1), mcp.Max(k8s.MaxLogTailLines), mcp.MultipleOf(1)),
+		mcp.WithNumber("sinceSeconds",
+			mcp.Description("Only inspect logs from this many seconds before the request when detecting GPU issues. Default: 3600 (one hour)."),
+			mcp.DefaultNumber(k8s.DefaultLogSinceSeconds),
+			mcp.Min(1), mcp.Max(k8s.MaxLogSinceSeconds), mcp.MultipleOf(1)),
 	)
 }
 

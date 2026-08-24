@@ -2,10 +2,21 @@ apiVersion: daedalus.context/v1
 kind: Topology
 partOf: daedalus-context
 releases:
-  milvus:
-    owner: nim-milvus-ms
+  hindsight:
+    owner: ../daedalus-hindsight/charts/daedalus-hindsight
     tier: online
-    namespace: milvus
+    namespace: daedalus
+    requiredFor: [durable-memory]
+    services:
+      api:
+        name: hindsight-api
+        port: 8888
+        protocol: http
+        healthPath: /health
+  milvus:
+    owner: helm/milvus
+    tier: online
+    namespace: daedalus
     requiredFor: [domain-retrieval, existing-document-search]
     services:
       api:
@@ -20,7 +31,7 @@ releases:
   retriever:
     owner: nemotron-retriever
     tier: online
-    namespace: daedalus-retriever
+    namespace: daedalus
     requiredFor: [domain-retrieval, existing-document-search]
     services:
       embeddings:
@@ -35,9 +46,9 @@ releases:
         healthPath: /adapter-health
         optional: true
   nv-ingest:
-    owner: nv-ingest
+    owner: helm/nv-ingest
     tier: ingestion
-    namespace: nv-ingest
+    namespace: daedalus
     requiredFor: [new-document-ingestion, collection-refresh]
     dependsOn: [milvus, retriever]
     services:
@@ -47,9 +58,9 @@ releases:
         protocol: http
         healthPath: /v1/health/ready
   pdf-server:
-    owner: pdf-server
+    owner: helm/pdf-server
     tier: ingestion
-    namespace: milvus
+    namespace: daedalus
     requiredFor: [collection-refresh]
     services:
       corpus:
@@ -58,16 +69,16 @@ releases:
         protocol: http
         healthPath: /readyz
   url-ingest:
-    owner: url-ingest
+    owner: helm/url-ingest
     tier: ingestion
-    namespace: milvus
+    namespace: daedalus
     requiredFor: [collection-refresh]
     dependsOn: [milvus, retriever, nv-ingest, pdf-server]
     services: {}
   k8s-mcp:
-    owner: k8s-multicluster-mcp
+    owner: helm/k8s-mcp-server
     tier: tools
-    namespace: k8s-mcp-server
+    namespace: daedalus
     requiredFor: []
     services:
       mcp:
@@ -79,9 +90,9 @@ releases:
         dependencyPath: /dependencyz
         mcpPath: /mcp
   unifi-mcp:
-    owner: unifi-network-mcp
+    owner: helm/unifi-network-mcp-server
     tier: tools
-    namespace: unifi-network-mcp-server
+    namespace: daedalus
     requiredFor: []
     services:
       mcp:
@@ -93,10 +104,10 @@ releases:
         dependencyPath: /dependencyz
         mcpPath: /mcp
 profiles:
-  online-required: [milvus, retriever]
+  online-required: [hindsight, milvus, retriever]
   ingestion: [milvus, retriever, nv-ingest, pdf-server, url-ingest]
   tools: [k8s-mcp, unifi-mcp]
-  all: [milvus, retriever, nv-ingest, pdf-server, url-ingest, k8s-mcp, unifi-mcp]
+  all: [hindsight, milvus, retriever, nv-ingest, pdf-server, url-ingest, k8s-mcp, unifi-mcp]
 failurePolicy:
   coreChatRequiresContext: false
   reranker: fail-open

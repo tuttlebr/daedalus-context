@@ -43,6 +43,7 @@ def render_job(cronjob: dict, args: argparse.Namespace) -> dict:
         "INGEST_SHARD_COUNT": str(args.shard_count),
         "INGEST_SHARD_INDEX": str(args.shard_index),
         "INGEST_VERIFY_ONLY": str(args.verify_only).lower(),
+        "GLOBAL_INGEST_CAPACITY": str(args.global_ingest_capacity),
         "MILVUS_URI": args.milvus_uri,
         "MINIO_ENDPOINT": args.minio_endpoint,
         "MINIO_BUCKET": args.minio_bucket,
@@ -100,6 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--run-crawl", action="store_true")
+    parser.add_argument("--global-ingest-capacity", type=int, default=1)
     parser.add_argument("--client-image", required=True)
     parser.add_argument("--milvus-uri", required=True)
     parser.add_argument("--minio-endpoint", required=True)
@@ -116,6 +118,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.shard_count < 1:
         parser.error("--shard-count must be >= 1")
+    if args.global_ingest_capacity < 1:
+        parser.error("--global-ingest-capacity must be >= 1")
     if not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, shard-count)")
     for name in (

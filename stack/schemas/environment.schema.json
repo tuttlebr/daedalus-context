@@ -15,7 +15,7 @@
       "uniqueItems": true,
       "items": { "type": "string" }
     },
-    "namespaceMode": { "enum": ["independent", "single-development"] },
+    "namespaceMode": { "enum": ["shared", "single-development"] },
     "storage": { "type": "object" },
     "acceptance": {
       "type": "object",

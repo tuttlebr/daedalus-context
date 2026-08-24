@@ -54,6 +54,7 @@ URL_INGEST_NAMESPACE="${URL_INGEST_NAMESPACE:-${NAMESPACE}}"
 PDF_SOURCE_HOST_PATH="${PDF_SOURCE_HOST_PATH:-${SCRIPT_DIR}}"
 PDF_SOURCE_NODE="${PDF_SOURCE_NODE:-${URL_INGEST_SOURCE_NODE:-daedalus-01}}"
 PUBLISH_CORPUS="${PUBLISH_CORPUS:-false}"
+PUBLISH_ONLY="${PUBLISH_ONLY:-false}"
 CORPUS_GENERATION="${CORPUS_GENERATION:-}"
 PUBLISH_DEADLINE_SECONDS="${PUBLISH_DEADLINE_SECONDS:-900}"
 
@@ -110,16 +111,23 @@ case "${TARGET}" in
     require_command sha256sum
     require_semver_image_ref "PDF_SERVER_IMAGE" "${PDF_SERVER_IMAGE}"
     if is_true "${DRY_RUN}"; then
-      render_server | kubectl --namespace="${NAMESPACE}" apply --dry-run=client -f -
+      if ! is_true "${PUBLISH_ONLY}"; then
+        render_server | kubectl --namespace="${NAMESPACE}" apply --dry-run=client -f -
+      fi
       if is_true "${PUBLISH_CORPUS}"; then
         render_publisher | kubectl --namespace="${NAMESPACE}" apply --dry-run=client -f -
       fi
       exit 0
     fi
-    kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-    render_server | kubectl --namespace="${NAMESPACE}" apply -f -
-    kubectl -n "${NAMESPACE}" rollout status deploy/pdf-server --timeout="${ROLLOUT_TIMEOUT}"
-    kubectl -n "${NAMESPACE}" get deploy,svc,pvc -l app.kubernetes.io/name=pdf-server
+    if is_true "${PUBLISH_ONLY}"; then
+      kubectl -n "${NAMESPACE}" get deployment/pdf-server service/pdf-server \
+        persistentvolumeclaim/pdf-server-data >/dev/null
+    else
+      kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+      render_server | kubectl --namespace="${NAMESPACE}" apply -f -
+      kubectl -n "${NAMESPACE}" rollout status deploy/pdf-server --timeout="${ROLLOUT_TIMEOUT}"
+      kubectl -n "${NAMESPACE}" get deploy,svc,pvc -l app.kubernetes.io/name=pdf-server
+    fi
     if is_true "${PUBLISH_CORPUS}"; then
       publish_manifest="$(mktemp)"
       trap 'rm -f "${publish_manifest}"' EXIT

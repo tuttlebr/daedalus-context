@@ -1,0 +1,10 @@
+apiVersion: v2
+name: daedalus-nv-ingest
+description: Daedalus-owned wrapper around the pinned NVIDIA NV-Ingest chart
+type: application
+version: 0.1.0
+appVersion: "26.3.0"
+dependencies:
+  - name: nv-ingest
+    version: 26.3.0
+    repository: https://helm.ngc.nvidia.com/nvidia/nemo-microservices

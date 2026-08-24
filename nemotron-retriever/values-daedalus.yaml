@@ -1,0 +1,16 @@
+# Production values for the shared Daedalus namespace. The Agent consumes both
+# endpoints through same-namespace ClusterIP Services.
+networkPolicy:
+  ciliumNodePort:
+    enabled: false
+  ingressCIDRs: {embedder: [], reranker: []}
+
+embedder:
+  service:
+    type: ClusterIP
+    port: 8000
+
+reranker:
+  service:
+    type: ClusterIP
+    port: 8000

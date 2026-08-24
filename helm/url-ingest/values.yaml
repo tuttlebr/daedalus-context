@@ -1,0 +1,162 @@
+nameOverride: ""
+fullnameOverride: url-ingest
+
+images:
+  crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
+  runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
+  pullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: nvcr-imagepullsecret
+
+serviceAccount:
+  create: true
+  name: ""
+
+persistence:
+  data:
+    storageClass: nfs-client
+    accessModes: [ReadWriteMany]
+    size: 50Gi
+    keep: true
+  manifests:
+    storageClass: nfs-client
+    accessModes: [ReadWriteMany]
+    size: 1Gi
+    keep: true
+  pdfClaimName: pdf-server-data
+
+endpoints:
+  nvIngestHost: nv-ingest
+  nvIngestPort: 7670
+  milvusUri: http://milvus:19530
+  minioEndpoint: milvus-minio:9000
+  minioBucket: nv-ingest
+
+auth:
+  huggingFace:
+    existingSecret: url-ingest-hf
+    tokenKey: HF_ACCESS_TOKEN
+  milvus:
+    username: root
+    existingSecret: milvus-root-credentials
+    passwordKey: password
+  minio:
+    existingSecret: milvus-minio-credentials
+    accessKey: accesskey
+    secretKey: secretkey
+
+schedules:
+  suspend: true
+  startingDeadlineSeconds: 3600
+  activeDeadlineSeconds: 86400
+  ttlSecondsAfterFinished: 172800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+ingestion:
+  # Shared manifest-PVC semaphore capacity. Keep scheduled jobs serialized by
+  # default; root manual runs override this to their bounded shard parallelism.
+  globalCapacity: 1
+
+urlLists:
+  kubernetes: ""
+  vetpartner: ""
+
+collections:
+  nvidia:
+    schedule: "0 2 * * 0"
+    includePdfs: true
+    fileChunkSize: 32
+    urlFileChunkSize: 32
+    # External extraction NIMs are shared and may throttle large PDFs. Keep
+    # PDF submissions small without reducing URL-ingestion concurrency.
+    pdfFileChunkSize: 2
+    clientBatchSize: 16
+    clientConcurrencyLimit: 16
+    workSize: 30Gi
+    resources:
+      requests: {memory: 8Gi, cpu: "4", ephemeral-storage: 10Gi}
+      limits: {memory: 16Gi, cpu: "8", ephemeral-storage: 30Gi}
+    crawlers:
+      - name: nvidiadocs
+        file: nvidiadocs_url_links.txt
+        inputType: sitemap
+        maxAgeDays: 365
+        tryMarkdown: true
+      - name: nvidia
+        file: nvidia_url_links.txt
+        inputType: sitemap
+        maxAgeDays: 365
+  kubernetes:
+    schedule: "0 3 * * 0"
+    includePdfs: true
+    fileChunkSize: 64
+    urlFileChunkSize: 64
+    pdfFileChunkSize: 2
+    clientBatchSize: 16
+    clientConcurrencyLimit: 16
+    workSize: 10Gi
+    resources:
+      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
+    crawlers:
+      - name: kubernetes
+        file: k8s_url_links.txt
+        inputType: url
+  vetpartner:
+    schedule: "0 4 * * 0"
+    includePdfs: true
+    fileChunkSize: 64
+    urlFileChunkSize: 64
+    pdfFileChunkSize: 2
+    clientBatchSize: 16
+    clientConcurrencyLimit: 16
+    workSize: 10Gi
+    resources:
+      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
+    crawlers:
+      - name: vetpartner
+        file: vetpartner_url_links.txt
+        inputType: url
+  semianalysis:
+    schedule: "0 5 * * 0"
+    includePdfs: true
+    fileChunkSize: 64
+    urlFileChunkSize: 64
+    pdfFileChunkSize: 2
+    clientBatchSize: 16
+    clientConcurrencyLimit: 16
+    workSize: 15Gi
+    resources:
+      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 4Gi}
+      limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 15Gi}
+    crawlers:
+      - name: semianalysis
+        file: semianalysis_url_links.txt
+        inputType: sitemap
+        maxAgeDays: 365
+  mentalhealth:
+    schedule: "0 6 * * 0"
+    includePdfs: true
+    fileChunkSize: 8
+    urlFileChunkSize: 64
+    pdfFileChunkSize: 2
+    clientBatchSize: 8
+    clientConcurrencyLimit: 8
+    workSize: 10Gi
+    resources:
+      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
+    crawlers: []
+
+nodeSelector: {}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [daedalus-06]
+tolerations: []

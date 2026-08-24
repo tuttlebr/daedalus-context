@@ -1,0 +1,3 @@
+Milvus is installed as release {{ .Release.Name }} in {{ .Release.Namespace }}.
+The existing Secrets milvus-root-credentials and milvus-minio-credentials must
+remain externally managed.

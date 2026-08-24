@@ -1,0 +1,56 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "k8s-mcp.fullname" . }}-netpol
+  labels:
+    {{- include "k8s-mcp.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "k8s-mcp.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities: [host, remote-node]
+      toPorts: [{ports: [{port: "8080", protocol: TCP}]}]
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+      toPorts: [{ports: [{port: "8080", protocol: TCP}]}]
+  egress:
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+          rules: {dns: [{matchPattern: "*"}]}
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+          rules: {dns: [{matchPattern: "*"}]}
+    - toEntities: [kube-apiserver]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "k8s-mcp.fullname" . }}-fqdn-egress
+  labels:
+    {{- include "k8s-mcp.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "k8s-mcp.selectorLabels" . | nindent 6 }}
+  egress:
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+          rules: {dns: [{matchPattern: "*"}]}
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+          rules: {dns: [{matchPattern: "*"}]}
+    - toFQDNs:
+        {{- range .Values.networkPolicy.externalHttpsFqdns }}
+        - {{ if contains "*" . }}matchPattern{{ else }}matchName{{ end }}: {{ . | quote }}
+        {{- end }}
+      toPorts: [{ports: [{port: "443", protocol: TCP}]}]
+{{- end }}

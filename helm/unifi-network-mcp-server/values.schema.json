@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["replicaCount", "image", "auth", "controller", "service"],
+  "properties": {
+    "replicaCount": {"type": "integer", "minimum": 1},
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1}
+      }
+    },
+    "controller": {
+      "type": "object",
+      "required": ["baseUrl", "existingSecret", "cidr"],
+      "properties": {
+        "baseUrl": {"type": "string", "pattern": "^https://"},
+        "cidr": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -384,13 +384,18 @@ release or Kubernetes volume configuration.
 
 | Tool                  | Description                                        | Key Parameters                                     |
 | --------------------- | -------------------------------------------------- | -------------------------------------------------- |
-| `getPodsLogs`         | Pod logs (single or all containers)                | `name`\*, `namespace`\*, `containerName`           |
-| `getPodDebugInfo`     | Comprehensive pod debug (conditions, events, logs) | `name`\*, `namespace`\*, `includeLogs`, `logLines` |
+| `getPodsLogs`         | Time-bounded pod logs with timestamps              | `name`\*, `namespace`\*, `containerName`, `sinceSeconds`, `tailLines` |
+| `getPodDebugInfo`     | Comprehensive pod debug (conditions, events, logs) | `name`\*, `namespace`\*, `includeLogs`, `logLines`, `sinceSeconds` |
 | `getServiceEndpoints` | Service endpoints with pod health status           | `name`\*, `namespace`\*, `checkHealth`             |
 | `getNetworkPolicies`  | Network policies affecting a namespace or pod      | `namespace`\*, `podName`, `includeDetails`         |
 | `getSecurityContext`  | Pod and container security contexts                | `name`\*, `namespace`\*, `includeDefaults`         |
 | `getResourceHistory`  | Recent events and changes for a resource           | `kind`\*, `name`\*, `namespace`, `hours`           |
 | `validateManifest`    | Dry-run validation of YAML/JSON manifests          | `manifest`\*, `format`, `strict`                   |
+
+Log-returning tools default to the last hour, include Kubernetes timestamps,
+and apply a per-container line cap. Set `sinceSeconds` explicitly when a
+different window is required; the supported range is one second through seven
+days.
 
 #### GPU Debugging
 
@@ -398,7 +403,7 @@ release or Kubernetes volume configuration.
 | ------------------------ | ------------------------------------------------ | --------------------------------------------------- |
 | `getGPUClusterOverview`  | Cluster-wide GPU resource and workload overview  | `includeNonGPUNodes`, `includeEvents`               |
 | `diagnoseGPUScheduling`  | Diagnose GPU scheduling for a specific pod       | `podName`\*, `namespace`\*                          |
-| `getGPUOperatorHealth`   | NVIDIA operator and device plugin health check   | `devicePluginNamespace`, `gpuOperatorNamespace`     |
+| `getGPUOperatorHealth`   | NVIDIA operator and device plugin health check   | `devicePluginNamespace`, `gpuOperatorNamespace`, `logLines`, `sinceSeconds` |
 
 ### Kubernetes — Write Tools
 

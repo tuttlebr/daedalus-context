@@ -51,6 +51,7 @@ class RenderManualJobTests(unittest.TestCase):
             shard_index=0,
             verify_only=False,
             run_crawl=False,
+            global_ingest_capacity=2,
             client_image="nv-ingest:26.3.0",
             milvus_uri="http://custom-milvus:19530",
             minio_endpoint="custom-minio:9000",
@@ -76,6 +77,7 @@ class RenderManualJobTests(unittest.TestCase):
         self.assertEqual("custom-minio:9000", env["MINIO_ENDPOINT"])
         self.assertEqual("custom-ingest", env["NV_INGEST_MESSAGE_HOST"])
         self.assertEqual("8", env["INGEST_SHARD_COUNT"])
+        self.assertEqual("2", env["GLOBAL_INGEST_CAPACITY"])
         self.assertIn("run-s00", env["STATUS_REPORT_PATH"])
         self.assertIn("run-s00", env["FAILURES_REPORT_PATH"])
         self.assertEqual(21600, job["spec"]["activeDeadlineSeconds"])

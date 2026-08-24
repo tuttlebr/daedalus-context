@@ -3,6 +3,7 @@ package tools
 
 import (
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tuttlebr/kubernetes-mcp-server/pkg/k8s"
 )
 
 // GetAPIResourcesTool creates a tool for discovering available API resource types in the cluster.
@@ -96,17 +97,26 @@ func GetPodsLogsTools() mcp.Tool {
 	return mcp.NewTool(
 		"getPodsLogs",
 		mcp.WithDescription("Retrieve stdout/stderr logs from a specific pod. "+
-			"Returns plain-text log output. If the pod has multiple containers, specify containerName "+
-			"to target a specific container, otherwise logs from the default container are returned. "+
+			"Returns only logs from an explicit recent time window and prefixes every log line with its Kubernetes timestamp. "+
+			"If the pod has multiple containers, specify containerName "+
+			"to target one container; otherwise logs from all regular containers are returned. "+
 			"For comprehensive pod debugging including logs, events, and conditions, use getPodDebugInfo instead."),
 		mcp.WithString("name", mcp.Required(),
 			mcp.Description("Exact name of the pod. Example: \"my-app-7d9f5b4c6-x2k4m\".")),
 		mcp.WithString("containerName",
 			mcp.Description("Name of the container within the pod to get logs from. "+
-				"Required if the pod has multiple containers (e.g. sidecars, init containers). "+
-				"Omit to use the pod's default container.")),
+				"Use this to isolate a sidecar or other regular container. "+
+				"Omit to retrieve logs from every regular container in the pod.")),
 		mcp.WithString("namespace", mcp.Required(),
 			mcp.Description("Namespace where the pod is running. Example: \"default\", \"kube-system\".")),
+		mcp.WithNumber("sinceSeconds",
+			mcp.Description("Only return log entries from this many seconds before the request. Default: 3600 (one hour)."),
+			mcp.DefaultNumber(k8s.DefaultLogSinceSeconds),
+			mcp.Min(1), mcp.Max(k8s.MaxLogSinceSeconds), mcp.MultipleOf(1)),
+		mcp.WithNumber("tailLines",
+			mcp.Description("Maximum number of log lines to return per container within the time window. Default: 100."),
+			mcp.DefaultNumber(k8s.DefaultPodLogTailLines),
+			mcp.Min(1), mcp.Max(k8s.MaxLogTailLines), mcp.MultipleOf(1)),
 	)
 }
 
@@ -423,7 +433,12 @@ func GetPodDebugInfoTool() mcp.Tool {
 			mcp.DefaultBool(true)),
 		mcp.WithNumber("logLines",
 			mcp.Description("Number of recent log lines to include per container. Only used when includeLogs is true. Default: 50."),
-			mcp.DefaultNumber(50)),
+			mcp.DefaultNumber(k8s.DefaultDebugLogLines),
+			mcp.Min(1), mcp.Max(k8s.MaxLogTailLines), mcp.MultipleOf(1)),
+		mcp.WithNumber("sinceSeconds",
+			mcp.Description("Only include logs from this many seconds before the request. Only used when includeLogs is true. Default: 3600 (one hour)."),
+			mcp.DefaultNumber(k8s.DefaultLogSinceSeconds),
+			mcp.Min(1), mcp.Max(k8s.MaxLogSinceSeconds), mcp.MultipleOf(1)),
 	)
 }
 

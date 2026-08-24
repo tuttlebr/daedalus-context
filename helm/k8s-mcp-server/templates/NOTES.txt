@@ -1,0 +1,2 @@
+Kubernetes MCP is available at http://{{ include "k8s-mcp.fullname" . }}:{{ .Values.service.port }}/mcp inside {{ .Release.Namespace }}.
+The chart references existing Secret {{ .Values.auth.existingSecret }} and never stores credentials in release values.

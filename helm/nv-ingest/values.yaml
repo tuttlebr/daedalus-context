@@ -1,0 +1,58 @@
+# nv-ingest contains values passed to the pinned upstream dependency.
+nv-ingest:
+  fullnameOverride: nv-ingest
+  replicaCount: 2
+  image:
+    repository: nvcr.io/nvidia/nemo-microservices/nv-ingest
+    tag: 26.3.0
+  service:
+    type: ClusterIP
+    port: 7670
+  extraEnvVarsSecret: nv-ingest-object-store
+  ngcImagePullSecret:
+    create: false
+    name: ngc-secret
+  ngcApiSecret:
+    create: false
+  milvusDeployed: false
+  envVars:
+    EMBEDDING_NIM_ENDPOINT: http://nemotron-retriever-embedder:8000/v1
+    EMBEDDING_NIM_MODEL_NAME: nvidia/llama-nemotron-embed-vl-1b-v2
+    MILVUS_ENDPOINT: http://milvus:19530
+    MINIO_INTERNAL_ADDRESS: http://milvus-minio:9000
+    MINIO_PUBLIC_ADDRESS: http://milvus-minio:9000
+    MINIO_BUCKET: nv-ingest
+    IMAGE_STORAGE_URI: ""
+    COMPONENTS_TO_READY_CHECK: ""
+    MINIO_ACCESS_KEY: null
+    MINIO_SECRET_KEY: null
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: nv-ingest
+              app.kubernetes.io/instance: nv-ingest
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values: [daedalus-06]
+  redis:
+    master:
+      persistence:
+        storageClass: nfs-client
+        size: 50Gi
+    replica:
+      replicaCount: 1
+      persistence:
+        storageClass: nfs-client
+        size: 50Gi
+
+# podDisruptionBudget configures the API availability budget missing upstream.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

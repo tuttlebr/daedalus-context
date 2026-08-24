@@ -1,0 +1,46 @@
+nameOverride: ""
+fullnameOverride: unifi-network-mcp-server
+replicaCount: 2
+image:
+  repository: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+serviceAccount:
+  create: true
+  name: ""
+auth:
+  existingSecret: unifi-network-mcp-auth
+  tokenKey: token
+  nextTokenKey: next-token
+controller:
+  baseUrl: https://unifi.example/proxy/network/integration
+  insecureSkipVerify: false
+  existingSecret: unifi-network-mcp-unifi-api
+  apiKeyKey: api-key
+  cidr: 192.0.2.10/32
+service:
+  port: 8080
+  external:
+    enabled: false
+    nodePort: 30081
+    loadBalancerClass: daedalus.ai/nodeport-only
+    sourceRanges: []
+resources:
+  requests: {memory: 64Mi, cpu: 50m}
+  limits: {memory: 256Mi, cpu: 500m}
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+networkPolicy:
+  enabled: true
+nodeSelector: {}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [daedalus-06]
+tolerations: []

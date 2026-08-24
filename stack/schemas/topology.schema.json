@@ -10,8 +10,9 @@
     "releases": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["milvus", "retriever", "nv-ingest", "pdf-server", "url-ingest", "k8s-mcp", "unifi-mcp"],
+      "required": ["hindsight", "milvus", "retriever", "nv-ingest", "pdf-server", "url-ingest", "k8s-mcp", "unifi-mcp"],
       "properties": {
+        "hindsight": { "$ref": "#/definitions/release" },
         "milvus": { "$ref": "#/definitions/release" },
         "retriever": { "$ref": "#/definitions/release" },
         "nv-ingest": { "$ref": "#/definitions/release" },

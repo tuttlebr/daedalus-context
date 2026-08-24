@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "unifi-mcp.fullname" . }}-defaults
+  labels:
+    {{- include "unifi-mcp.labels" . | nindent 4 }}
+data:
+  base-url: {{ .Values.controller.baseUrl | quote }}
+  insecure-skip-verify: {{ .Values.controller.insecureSkipVerify | quote }}

@@ -10,6 +10,40 @@ from pathlib import Path
 
 
 class JobControlTests(unittest.TestCase):
+    def test_wait_for_any_job_reports_first_completed_job(self):
+        library = Path(__file__).parents[1] / "k8s" / "lib" / "job-control.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            fake_kubectl = Path(directory) / "kubectl"
+            fake_kubectl.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    if [[ "$*" == *"get job/complete"* ]]; then
+                      printf 'Complete=True Completed\\n'
+                    fi
+                    exit 0
+                    """
+                )
+            )
+            fake_kubectl.chmod(0o755)
+            command = (
+                f"source {library!s}; "
+                "wait_for_any_job test 30 1 running complete; "
+                'printf "%s" "$WAIT_FOR_ANY_COMPLETED_JOB"'
+            )
+            env = os.environ.copy()
+            env["KUBECTL_BIN"] = str(fake_kubectl)
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", command],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(result.stdout.endswith("complete"), result.stdout)
+
     def test_failed_job_returns_immediately_with_diagnostics(self):
         library = Path(__file__).parents[1] / "k8s" / "lib" / "job-control.sh"
         with tempfile.TemporaryDirectory() as directory:

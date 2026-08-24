@@ -20,23 +20,22 @@ cd /volume2/daedalus/datasets/daedalus-context
 test -e .env || cp .env.example .env
 ${EDITOR:-vi} .env
 
-set -a
-source .env
-set +a
-
-export ENVIRONMENT=production
-export EXPECTED_CONTEXT=kubernetes-admin@kubernetes
-
-make doctor
-make show-config
-make validate-cluster
+make verify-shared-secrets
 make deploy
-make health-provider
 ```
 
-Replace the example context with the approved literal context for the target
-cluster. Do not populate `EXPECTED_CONTEXT` by reading the current context in
-the same command. That would defeat the wrong-cluster guard.
+Set `ENVIRONMENT` and the approved literal `EXPECTED_CONTEXT` in `.env` before
+running the command. Do not populate `EXPECTED_CONTEXT` by reading the current
+context. That would defeat the wrong-cluster guard. `make deploy` loads `.env`,
+runs doctor and non-secret configuration checks, validates the cluster,
+reconciles all eight Helm releases in `daedalus`, and checks provider health.
+For the one-time conversion from the legacy namespaces, run
+`make migrate-legacy-secrets` before the verification command. It copies only
+the required Secret data and refuses to overwrite a differing destination.
+If Hindsight already exists in `daedalus-hindsight`, run `make
+migrate-hindsight` before the first full deployment. That guarded workflow
+copies its Secret and PostgreSQL data, compares source and target fingerprints,
+and leaves the old database/PVC available for rollback.
 
 After the providers are ready:
 
@@ -70,14 +69,16 @@ make health-stack
 | Build the five local images | `make images-build` | Writes local image state |
 | Build and publish a versioned image release | `make images-publish` | Writes local image and remote registry state |
 | Run source tests and renders | `make validate-local` | Read-only validation plus disposable build output |
+| Validate all eight chart contracts | `make validate-helm` | Read-only local Helm lint and render |
 | Validate manifests and cluster capacity | `make validate-cluster` | Read-only cluster access and client dry-runs |
-| Reconcile all selected services | `make deploy` | Writes Kubernetes resources |
+| Validate, reconcile, and check all selected services | `make deploy` | Reads `.env` and writes Kubernetes resources |
 | Reconcile an already-published update | `make update` | Writes Kubernetes resources |
 | Restart selected long-running workloads | `make redeploy` | Restarts pods; does not delete PVCs |
 | Check provider workloads | `make health-provider` | Read-only cluster access |
 | Check dependencies and data freshness | `make health-dependencies` | Read-only cluster access |
 | Probe providers from Daedalus | `make health-integration` | Read-only cluster access |
 | Publish or ingest data | `make seed-data` or `make run-ingest` | Writes corpus, Jobs, and collection data |
+| Remove an accepted legacy stack | `make cleanup-legacy` | Destructively removes only the documented legacy targets |
 
 Every command that reads or writes Kubernetes requires `EXPECTED_CONTEXT` and
 refuses to continue when it does not match the active context.
@@ -88,15 +89,18 @@ The dependency graph is declared in `stack/topology.yaml`.
 
 | Component | Owning directory | Namespace | Role |
 | --- | --- | --- | --- |
-| `milvus` | `nim-milvus-ms/` | `milvus` | Vector database and MinIO object storage |
-| `retriever` | `nemotron-retriever/` | `daedalus-retriever` | Embedding and optional reranking inference |
-| `nv-ingest` | `nv-ingest/` | `nv-ingest` | Document extraction, chunking, and storage |
-| `pdf-server` | `pdf-server/` | `milvus` | Versioned, read-only source PDF corpus |
-| `url-ingest` | `url-ingest/` | `milvus` | Scheduled and manual collection population |
-| `k8s-mcp` | `k8s-multicluster-mcp/` | `k8s-mcp-server` | Authenticated Kubernetes operations tools |
-| `unifi-mcp` | `unifi-network-mcp/` | `unifi-network-mcp-server` | Authenticated, read-only UniFi tools |
+| `hindsight` | `../daedalus-hindsight/charts/daedalus-hindsight/` | `daedalus` | Durable memory API, control plane, and PostgreSQL |
+| `milvus` | `helm/milvus/` | `daedalus` | Vector database and MinIO object storage |
+| `retriever` | `nemotron-retriever/` | `daedalus` | Embedding and optional reranking inference |
+| `nv-ingest` | `helm/nv-ingest/` | `daedalus` | Document extraction, chunking, and storage |
+| `pdf-server` | `helm/pdf-server/` | `daedalus` | Versioned, read-only source PDF corpus |
+| `url-ingest` | `helm/url-ingest/` | `daedalus` | Scheduled and manual collection population |
+| `k8s-mcp` | `helm/k8s-mcp-server/` | `daedalus` | Authenticated Kubernetes operations tools |
+| `unifi-mcp` | `helm/unifi-network-mcp-server/` | `daedalus` | Authenticated, read-only UniFi tools |
 
 ```text
+hindsight   (independent durable-memory service)
+
 milvus -----+
              +--> nv-ingest --+
 retriever --+                 |
@@ -107,8 +111,8 @@ k8s-mcp    (independent)
 unifi-mcp  (independent)
 ```
 
-The root orchestrator deploys independent roots concurrently. It starts a
-dependent component only after its selected dependencies succeed. A failed
+The root orchestrator deploys releases serially in dependency order. It starts
+a dependent component only after its selected dependencies succeed. A failed
 component blocks only its dependents. The final JSON report identifies every
 `succeeded`, `failed`, and `blockedBy` component.
 
@@ -123,12 +127,14 @@ The runtime failure policy follows the same boundaries:
 
 ## Configuration
 
-The root `.env` is the shared configuration file. It is ignored by Git.
-Component wrappers load the root file and then an optional component-local
-`.env`. Explicit caller values take final precedence.
+The root `.env` is the canonical shared configuration file. It is ignored by
+Git. Context-owned charts do not discover component-local `.env` files. The
+`hindsight` lifecycle targets deliberately delegate to its adjacent owning
+repository, whose `.env` supplies its database and API credentials; explicit
+caller values still take final precedence.
 
-GNU Make does not load `.env` automatically. Export it before cluster
-operations:
+`make deploy` loads `.env` automatically for its complete deployment workflow.
+Export `.env` before invoking other cluster targets directly:
 
 ```bash
 set -a
@@ -144,18 +150,33 @@ Review at least these settings before deployment:
 | Area | Required configuration |
 | --- | --- |
 | Images | Published SemVer image references and `DAEDALUS_CONTEXT_IMAGE_VERSION` |
-| Context | Exact `EXPECTED_CONTEXT` supplied outside `.env` or through the operator environment |
+| Context | Exact approved `EXPECTED_CONTEXT` in `.env` or supplied through the operator environment |
+| Hindsight | Adjacent `HINDSIGHT_ROOT` plus its repository-owned runtime credentials |
 | Storage | Reviewed `MINIO_STORAGE_CLASS`, `ETCD_STORAGE_CLASS`, and `IMAGE_STORAGE_URI` |
 | Provider auth | Distinct Kubernetes MCP and UniFi MCP current tokens |
-| External MCP access | Stable NodePorts and `MCP_EXTERNAL_CLIENT_CIDR` |
+| External MCP access | `MCP_EXTERNAL_ENABLED`, stable NodePorts, and `MCP_EXTERNAL_CLIENT_CIDR` |
 | UniFi | Controller URL, exact controller CIDR, API key, and TLS policy |
 | NVIDIA and models | Required NGC, NVIDIA API, and Hugging Face credentials |
+| NV-Ingest extraction | Approved OCR, page/graphic/table layout, VLM caption, and Nemotron Parse HTTP endpoints and protocols |
 | Stateful credentials | Strong MinIO and Milvus credentials or authoritative Secrets |
 | Ingestion | Source paths, source node, collections, bucket, and job limits |
 
-Keep the existing independent namespaces. `STACK_NAMESPACE` is only for a
-reviewed namespace migration. It does not move PVC data, Secrets, or Milvus
-collections.
+All eight releases use `DAEDALUS_NAMESPACE=daedalus`. The chart values use
+same-namespace service names; there is no split-namespace production mode.
+
+Charts reference, but never create, production credentials. Create and manage
+the following Secrets through the approved Secret-management path:
+
+- `milvus-minio-credentials`, `milvus-root-credentials`;
+- `ngc-api`, `ngc-secret`, `nv-ingest-object-store`, `nvcr-imagepullsecret`;
+- `url-ingest-hf`;
+- `k8s-mcp-auth`; and
+- `unifi-network-mcp-auth`, `unifi-network-mcp-unifi-api`.
+
+Hindsight references `hindsight-runtime`, which its adjacent owning repository
+creates from `../daedalus-hindsight/.env` without placing credentials in Helm
+values. `make deploy-hindsight`, `make healthcheck-hindsight`, and `make
+migrate-hindsight` are the root entry points.
 
 Never commit `.env`, kubeconfigs, tokens, keys, credentials, or model data.
 
@@ -204,7 +225,7 @@ Published version tags must not be overwritten. `make deploy` and
 
 `stack/components.lock.yaml` is the release inventory. Before a rollout:
 
-1. Replace pending source revisions with reviewed commits.
+1. Replace `pending-uncommitted-working-tree` source revisions with reviewed commits.
 2. Publish the selected local image release.
 3. Record reviewed versions for upstream images and model artifacts.
 4. Keep the retriever revisions and serving contracts aligned with
@@ -228,7 +249,8 @@ failover, RPO, and RTO criteria.
 
 ### External MCP Network Prerequisite
 
-The fixed MCP NodePorts use `loadBalancerSourceRanges`. Cilium must enforce
+External MCP Services are disabled during bootstrap. When enabled, their fixed
+NodePorts use `loadBalancerSourceRanges`. Cilium must enforce
 source ranges for all load balancer types:
 
 ```bash
@@ -245,23 +267,27 @@ helm upgrade cilium cilium/cilium \
   --atomic --wait
 ```
 
-Use the exact installed Cilium version. The MCP wrappers fail closed when this
-setting is absent. Their intentionally unclaimed load balancer class prevents
-MetalLB from advertising an address while retaining fixed, CIDR-restricted
-NodePorts.
+Use the exact installed Cilium version. After internal provider and consumer
+checks pass, run `make enable-external-mcp`. The intentionally unclaimed load
+balancer class prevents an address controller from advertising the Service
+while retaining fixed, CIDR-restricted NodePorts. Because that Service never
+receives load-balancer ingress status, this target verifies the Deployment
+rollout and the exact NodePort, source range, Cilium annotation, and session
+affinity directly instead of waiting for an ingress address.
 
 ## Deploy and Update
 
-All seven components are selected by default:
+All eight components are selected by default. This one command loads `.env`,
+runs the deployment gates, reconciles the components, and checks provider
+health:
 
 ```bash
-make validate-cluster
 make deploy
-make health-provider
 ```
 
 Deployment is idempotent. It does not restart unchanged workloads, publish a
-corpus, or launch ingestion Jobs.
+corpus, or launch ingestion Jobs. URL CronJobs default to suspended and MCP
+Services default to ClusterIP for a safe fresh installation.
 
 Limit any operation with the allowlisted `COMPONENTS` variable:
 
@@ -277,16 +303,33 @@ healthy.
 Use the lifecycle targets according to intent:
 
 ```bash
-make deploy     # Reconcile desired state without forced restarts.
+make deploy     # Load config, validate, reconcile, and check provider health.
 make update     # Reconcile already-published versioned releases.
 make redeploy   # Deliberately restart selected long-running workloads.
 ```
 
 None of these targets uninstall releases or delete PVCs.
 
-Direct component `deploy.sh` commands remain useful for render inspection,
-focused debugging, and reviewed recovery. They are not an alternate seven-step
-deployment procedure. Return to the root workflow for releases.
+After the new stack, fresh corpus, Agent consumer path, schedules, and external
+MCP endpoints have all passed acceptance, the one-time legacy cleanup is:
+
+```bash
+CONFIRM_LEGACY_CLEANUP=delete-legacy-daedalus-context make cleanup-legacy
+```
+
+The command targets only `daedalus-hindsight`, `milvus`,
+`daedalus-retriever`, `nv-ingest`, `k8s-mcp-server`, and
+`unifi-network-mcp-server`, plus the old
+`k8s-mcp-server-readonly` cluster role/binding. Before wiping any retained
+local-etcd directory it snapshots the PV/node/path tuple, requires the old
+claim to be gone and the PV to be Released or Available, rejects attachments,
+symlinks, mountpoints, and paths outside the exact local-etcd PVC prefix.
+
+Each component is an ordinary Helm release and can be inspected with familiar
+commands such as `helm status`, `helm get values`, and `helm get manifest` in
+the `daedalus` namespace. See `helm/README.md` for release names, direct Helm
+commands, values, and Secret contracts. The root workflow remains the canonical
+way to preserve dependency order and safety gates.
 
 ## Data Operations
 
@@ -309,7 +352,11 @@ make run-ingest COLLECTIONS="nvidia kubernetes"
 `pdf-server` solely owns PDF Kubernetes resources and corpus publication.
 `url-ingest` consumes the selected corpus generation and owns its CronJobs,
 manifests, and ingestion Jobs. Scheduled and manual ingestion share a capacity
-lock.
+semaphore on the manifest PVC. `URL_INGEST_GLOBAL_CAPACITY` controls scheduled
+jobs and defaults to one; manual runs use `MAX_PARALLEL_INGEST_SHARDS` for both
+their shard batch size and immutable Job slot count. Keep the two values within
+the capacity of the shared extraction services. After a fresh seed and
+collection validation, run `make enable-schedules`.
 
 Normal seed and resume operations never drop a Milvus collection. Do not delete
 PVCs or collections to diagnose persistence.

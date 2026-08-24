@@ -568,8 +568,12 @@ require_labeled_pvc_storage minio "${MINIO_STORAGE_CLASS}" "${render_default}" \
   "The labeled MinIO PVC template must explicitly select ${MINIO_STORAGE_CLASS}"
 require_labeled_pvc_storage etcd "${ETCD_STORAGE_CLASS}" "${render_default}" \
   "The labeled etcd PVC template must explicitly select ${ETCD_STORAGE_CLASS}"
-require_fixed_count 'requiredDuringSchedulingIgnoredDuringExecution:' 1 "${render_default}" \
-  "The three-member etcd cluster must use hard pod anti-affinity"
+require_fixed_count 'requiredDuringSchedulingIgnoredDuringExecution:' 8 "${render_default}" \
+  "etcd must use hard pod anti-affinity while Milvus and MinIO exclude daedalus-06"
+require_fixed_count 'operator: NotIn' 7 "${render_default}" \
+  "Milvus components, MinIO, and its bucket hook must use the node exclusion"
+require_fixed_count 'daedalus-06' 7 "${render_default}" \
+  "Milvus components, MinIO, and its bucket hook must exclude daedalus-06"
 require_fixed_count 'whenUnsatisfiable: DoNotSchedule' 5 "${render_default}" \
   "Every replicated Milvus application component must use hard topology spread"
 require_present 'name: milvus-mixcoord' "${render_default}" \

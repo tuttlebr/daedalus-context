@@ -23,7 +23,7 @@ Review and accept the model repositories' NVIDIA Open Model License and referenc
 The model repositories currently permit anonymous downloads. If a token is needed, create it outside Helm so it is not stored in release values:
 
 ```bash
-kubectl --namespace daedalus-retriever create secret generic huggingface-token \
+kubectl --namespace daedalus create secret generic huggingface-token \
   --from-literal=token='<HUGGING_FACE_TOKEN>'
 ```
 
@@ -35,7 +35,7 @@ From the repository root:
 
 ```bash
 helm upgrade --install nemotron-retriever ./nemotron-retriever \
-  --namespace daedalus-retriever \
+  --namespace daedalus \
   --create-namespace \
   --set huggingFace.existingSecret=huggingface-token \
   --wait \
@@ -47,8 +47,8 @@ Omit the `huggingFace.existingSecret` setting for anonymous downloads. Resources
 Check rollout and service health:
 
 ```bash
-kubectl --namespace daedalus-retriever get deployments,pods,services,pvc
-helm --namespace daedalus-retriever test nemotron-retriever
+kubectl --namespace daedalus get deployments,pods,services,pvc
+helm --namespace daedalus test nemotron-retriever
 ```
 
 ## Endpoints
@@ -56,9 +56,9 @@ helm --namespace daedalus-retriever test nemotron-retriever
 Inside the cluster, the default service URLs are:
 
 ```text
-http://nemotron-retriever-embedder.daedalus-retriever.svc.cluster.local:8000/v1/embeddings
-http://nemotron-retriever-reranker.daedalus-retriever.svc.cluster.local:8000/rerank
-http://nemotron-retriever-reranker.daedalus-retriever.svc.cluster.local:8000/v1/ranking
+http://nemotron-retriever-embedder.daedalus.svc.cluster.local:8000/v1/embeddings
+http://nemotron-retriever-reranker.daedalus.svc.cluster.local:8000/rerank
+http://nemotron-retriever-reranker.daedalus.svc.cluster.local:8000/v1/ranking
 ```
 
 Daedalus uses native `/rerank` with `{query, documents, top_n}` and consumes
@@ -73,7 +73,7 @@ Embedding requests must use role `query` for search queries and role `document` 
 For local testing, forward the embedder Service:
 
 ```bash
-kubectl --namespace daedalus-retriever port-forward service/nemotron-retriever-embedder 8000:8000
+kubectl --namespace daedalus port-forward service/nemotron-retriever-embedder 8000:8000
 ```
 
 Then, in another terminal, submit a query embedding request using the NVIDIA-compatible payload:
@@ -110,7 +110,7 @@ curl --fail-with-body "$EMBEDDER_ENDPOINT" \
 Forward the reranker Service:
 
 ```bash
-kubectl --namespace daedalus-retriever port-forward service/nemotron-retriever-reranker 8001:8000
+kubectl --namespace daedalus port-forward service/nemotron-retriever-reranker 8001:8000
 ```
 
 Then, in another terminal, submit one query and its candidate documents:
@@ -262,6 +262,6 @@ been verified. Multi-replica renders add a PDB and hard hostname spread.
 ```bash
 helm lint ./nemotron-retriever
 helm template nemotron-retriever ./nemotron-retriever \
-  --namespace daedalus-retriever > /tmp/nemotron-retriever.yaml
+  --namespace daedalus > /tmp/nemotron-retriever.yaml
 kubectl apply --dry-run=client --filename /tmp/nemotron-retriever.yaml
 ```

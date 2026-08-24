@@ -131,32 +131,30 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
             if locked_model[field] != expected_value:
                 raise ValueError(f"locked {contract_key} {field} differs from rag-schema.yaml")
 
-    cronjob_dir = ROOT / "url-ingest" / "k8s"
+    url_ingest_values = load_yaml(ROOT / "helm" / "url-ingest" / "values.yaml")
+    chart_collections = url_ingest_values["collections"]
     for item in collections["collections"]:
-        manifest = load_yaml(cronjob_dir / f"cronjob-{item['alias']}.yaml")
-        if manifest["metadata"]["name"] != f"url-ingest-{item['alias']}":
-            raise ValueError(f"CronJob name differs for {item['alias']}")
-        if manifest["spec"]["schedule"] != item["schedule"]:
+        alias = item["alias"]
+        if alias not in chart_collections:
+            raise ValueError(f"URL ingest chart is missing collection {alias}")
+        if chart_collections[alias]["schedule"] != item["schedule"]:
             raise ValueError(f"CronJob schedule differs for {item['alias']}")
-        if manifest["spec"].get("startingDeadlineSeconds", 0) <= 0:
-            raise ValueError(f"CronJob lacks startingDeadlineSeconds for {item['alias']}")
-
-    service_account = (cronjob_dir / "serviceaccount.yaml").read_text(encoding="utf-8")
-    if "name: pdf-server" in service_account:
-        raise ValueError("url-ingest must not own the pdf-server ServiceAccount")
-    for removed in ("pdf-server.yaml", "seed-pdf-job.yaml"):
-        if (cronjob_dir / removed).exists():
-            raise ValueError(f"url-ingest still owns {removed}")
+    if set(chart_collections) != set(aliases):
+        raise ValueError("URL ingest chart collections differ from collections.yaml")
+    if url_ingest_values["schedules"].get("startingDeadlineSeconds", 0) <= 0:
+        raise ValueError("URL ingest chart lacks startingDeadlineSeconds")
+    if url_ingest_values["schedules"].get("suspend") is not True:
+        raise ValueError("URL ingest schedules must default to suspended")
 
     acceptance = environment["acceptance"]
     warnings: list[str] = []
-    pending_revisions = sorted(
+    unresolved_revisions = sorted(
         f"{component}.{field}"
         for component, values in locked_components.items()
         for field, value in values.items()
         if field == "sourceRevision"
         and isinstance(value, str)
-        and "pending" in value
+        and ("pending" in value or "uncommitted" in value)
     )
     semver_image_pattern = re.compile(
         r"^[^\s@]+:v?[0-9]+\.[0-9]+\.[0-9]+"
@@ -171,13 +169,17 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
                 raise ValueError(
                     f"invalid SemVer image release: {component}.{image_name}"
                 )
-    if pending_revisions:
+    if unresolved_revisions:
         warnings.append(
-            f"release source revisions pending: {', '.join(pending_revisions)}"
+            "release source revisions unresolved: "
+            f"{', '.join(unresolved_revisions)}"
         )
     if environment["production"]:
-        if environment["namespaceMode"] != "independent":
-            raise ValueError("production must retain independent namespaces")
+        if environment["namespaceMode"] != "shared":
+            raise ValueError("production must use the shared Daedalus namespace")
+        topology_namespaces = {item["namespace"] for item in releases.values()}
+        if topology_namespaces != {"daedalus"}:
+            raise ValueError("every production context release must use namespace daedalus")
         minio_class = environment.get("storage", {}).get("minioStorageClass", "")
         if minio_class == "local-etcd":
             raise ValueError("production MinIO must not use local-etcd")
@@ -198,7 +200,7 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
                     "HA validation is disabled by the approved personal-single-user policy"
                 )
             validate_approved_acceptance(acceptance)
-            if pending_revisions:
+            if unresolved_revisions:
                 raise ValueError(
                     "HA validation requires all release source revisions to resolve"
                 )
@@ -255,6 +257,7 @@ def agent_env(environment_name: str) -> str:
         f"RERANKER_BASE_URL={url('retriever', 'reranker', '/rerank')}",
         f"MILVUS_URI={url('milvus', 'api')}",
         f"NV_INGEST_ENDPOINT={url('nv-ingest', 'api')}",
+        f"HINDSIGHT_API_URL={url('hindsight', 'api')}",
         f"KUBERNETES_MCP_SERVER={url('k8s-mcp', 'mcp', '/mcp')}",
         f"UNIFI_MCP_SERVER={url('unifi-mcp', 'mcp', '/mcp')}",
         f"DAEDALUS_RAG_READINESS_MODE={environment['ragReadinessMode']}",
@@ -314,9 +317,11 @@ def run_operation(action: str, components: list[str]) -> int:
                 runnable.append(component)
 
         if runnable:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(runnable))) as executor:
-                results = list(executor.map(execute, runnable))
-            for component, result in results:
+            # Releases are intentionally reconciled serially. Several providers
+            # reserve substantial CPU, memory, or local storage, and serial
+            # output gives operators a deterministic failure boundary.
+            for component in runnable:
+                _, result = execute(component)
                 output = result.stdout.strip()
                 print(f"\n==> {action} {component}")
                 if output:

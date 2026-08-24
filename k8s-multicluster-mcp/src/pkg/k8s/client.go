@@ -794,15 +794,15 @@ func (c *Client) DescribeResource(ctx context.Context, kind, name, namespace str
 }
 
 // GetPodsLogs retrieves the logs for a specific pod.
-// It uses the corev1 clientset to fetch logs, limiting to the last 100 lines by default.
+// It uses the corev1 clientset to fetch logs within an explicit recent time window.
 // If containerName is provided, it gets logs for that specific container.
 // If containerName is empty and the pod has multiple containers, it gets logs from all containers.
 // Returns the logs as a string, or an error.
-func (c *Client) GetPodsLogs(ctx context.Context, namespace, containerName, podName string) (string, error) {
-	tailLines := int64(100)
-	podLogOptions := &corev1.PodLogOptions{
-		TailLines: &tailLines,
+func (c *Client) GetPodsLogs(ctx context.Context, namespace, containerName, podName string, tailLines, sinceSeconds int) (string, error) {
+	if err := validateLogQuery(tailLines, sinceSeconds); err != nil {
+		return "", err
 	}
+	podLogOptions := newPodLogOptions("", tailLines, sinceSeconds)
 
 	// If container name is provided, use it
 	if containerName != "" {
@@ -1938,10 +1938,13 @@ func (c *Client) GetTopNodes(ctx context.Context, sortBy string, includeConditio
 // Debugging & Troubleshooting Methods
 
 // GetPodDebugInfo gets comprehensive debugging information for a pod
-func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, includeLogs bool, logLines int) (map[string]interface{}, error) {
-	if logLines <= 0 {
-		logLines = 50
+func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, includeLogs bool, logLines, sinceSeconds int) (map[string]interface{}, error) {
+	if includeLogs {
+		if err := validateLogQuery(logLines, sinceSeconds); err != nil {
+			return nil, err
+		}
 	}
+	observedAt := time.Now().UTC()
 
 	result := map[string]interface{}{
 		"pod":        nil,
@@ -2033,14 +2036,11 @@ func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, in
 	}
 
 	if includeLogs {
+		result["logWindow"] = logWindowMetadata(observedAt, logLines, sinceSeconds)
 		logs := make(map[string]string)
 		for i := range pod.Status.ContainerStatuses {
 			cs := &pod.Status.ContainerStatuses[i]
-			tailLinesVal := int64(logLines)
-			logOptions := &corev1.PodLogOptions{
-				Container: cs.Name,
-				TailLines: &tailLinesVal,
-			}
+			logOptions := newPodLogOptions(cs.Name, logLines, sinceSeconds)
 
 			req := c.clientset.CoreV1().Pods(namespace).GetLogs(name, logOptions)
 			podLogs, err := req.Stream(ctx)

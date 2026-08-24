@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["milvus", "podDisruptionBudgets"],
+  "properties": {
+    "milvus": {
+      "type": "object",
+      "required": ["image", "minio", "etcd"],
+      "properties": {
+        "image": {"type": "object"},
+        "minio": {
+          "type": "object",
+          "required": ["existingSecret", "replicas", "persistence"],
+          "properties": {
+            "existingSecret": {"type": "string", "minLength": 1},
+            "replicas": {"type": "integer", "minimum": 4},
+            "persistence": {"type": "object"}
+          }
+        },
+        "etcd": {"type": "object", "required": ["persistence"]}
+      }
+    },
+    "podDisruptionBudgets": {"type": "object"}
+  }
+}

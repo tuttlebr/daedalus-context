@@ -1,0 +1,40 @@
+# replicaCount is the number of read-only corpus servers.
+replicaCount: 2
+
+# image configures the immutable PDF server image.
+image:
+  repository: daedalus.ddns.me:5050/btuttle/pdf-server
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+# imagePullSecrets lists existing registry credential Secrets.
+imagePullSecrets: []
+
+# persistence configures the shared corpus PVC.
+persistence:
+  create: true
+  existingClaim: ""
+  storageClass: nfs-client
+  accessModes: [ReadWriteMany]
+  size: 10Gi
+  keep: true
+
+# service configures the internal corpus endpoint.
+service:
+  type: ClusterIP
+  port: 80
+
+# networkPolicy limits ingress to Daedalus context/application pods.
+networkPolicy:
+  enabled: true
+  ingressPodSelectors:
+    - app.kubernetes.io/part-of: daedalus-context
+    - app.kubernetes.io/name: daedalus
+
+# nodePlacement excludes incompatible workers.
+nodePlacement:
+  excludedHostnames: [daedalus-06]
+
+resources:
+  requests: {memory: 64Mi, cpu: 50m}
+  limits: {memory: 128Mi, cpu: 200m}

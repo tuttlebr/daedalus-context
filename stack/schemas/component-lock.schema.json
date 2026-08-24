@@ -8,7 +8,7 @@
     "generatedAt": { "type": "string" },
     "components": {
       "type": "object",
-      "minProperties": 7,
+      "minProperties": 8,
       "additionalProperties": {
         "type": "object",
         "required": ["source", "sourceRevision"],

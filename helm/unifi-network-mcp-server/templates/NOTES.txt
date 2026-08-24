@@ -1,0 +1,2 @@
+UniFi MCP is available at http://{{ include "unifi-mcp.fullname" . }}:{{ .Values.service.port }}/mcp inside {{ .Release.Namespace }}.
+The chart references existing Secrets {{ .Values.auth.existingSecret }} and {{ .Values.controller.existingSecret }}.

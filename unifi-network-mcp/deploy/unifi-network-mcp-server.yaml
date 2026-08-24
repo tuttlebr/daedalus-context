@@ -80,6 +80,15 @@ spec:
           labelSelector:
             matchLabels:
               app: unifi-network-mcp-server
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - daedalus-06
       containers:
         - name: unifi-network-mcp-server
           image: __UNIFI_MCP_IMAGE__

@@ -61,6 +61,20 @@ metrics:
 
 topologySpreadConstraints: []
 
+# Keep Milvus application pods off the heterogeneous ARM64 worker. The
+# upstream image starts on that node, but streaming nodes can fail closed while
+# the dependency cluster is reconciling. MinIO and etcd retain their own
+# placement policies and existing PVC topology.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values:
+                - daedalus-06
+
 service:
   type: ClusterIP
   port: 19530
@@ -170,6 +184,18 @@ mixCoordinator:
 minio:
   enabled: true
   existingSecret: milvus-minio-credentials
+  # Distributed MinIO members verify that every peer runs the same binary.
+  # Mixed AMD64 and ARM64 members have different binary checksums and cannot
+  # form one server pool, so keep this release off the heterogeneous worker.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                  - daedalus-06
   # Never put object-store credentials in Helm values or the rendered Milvus
   # ConfigMap. Milvus receives them through the Secret-backed environment above.
   accessKey: ""

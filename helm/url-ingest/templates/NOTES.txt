@@ -1,0 +1,4 @@
+The five URL ingestion schedules are installed in {{ .Release.Namespace }}.
+They are {{ ternary "suspended" "enabled" .Values.schedules.suspend }}.
+Kubernetes and VetPartner lists must be supplied with --set-file during install.
+Corpus staging and ingestion are explicit root Makefile operations, not Helm hooks.

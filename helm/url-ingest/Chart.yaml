@@ -1,0 +1,7 @@
+apiVersion: v2
+name: url-ingest
+description: Scheduled URL crawling and explicit NV-Ingest corpus jobs for Daedalus
+type: application
+version: 0.1.0
+appVersion: "26.3.0"
+kubeVersion: ">=1.27.0-0"

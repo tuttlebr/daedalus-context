@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["images", "persistence", "endpoints", "auth", "schedules", "collections"],
+  "properties": {
+    "images": {
+      "type": "object",
+      "required": ["crawler", "runner"],
+      "properties": {
+        "crawler": {"type": "string", "minLength": 1},
+        "runner": {"type": "string", "minLength": 1},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "schedules": {
+      "type": "object",
+      "required": ["suspend"],
+      "properties": {"suspend": {"type": "boolean"}}
+    },
+    "collections": {"type": "object", "minProperties": 1},
+    "urlLists": {
+      "type": "object",
+      "required": ["kubernetes", "vetpartner"],
+      "properties": {
+        "kubernetes": {"type": "string"},
+        "vetpartner": {"type": "string"}
+      }
+    }
+  }
+}

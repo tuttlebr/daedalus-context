@@ -1,0 +1,3 @@
+NV-Ingest is installed as release {{ .Release.Name }} in {{ .Release.Namespace }}.
+The existing Secrets ngc-secret, ngc-api, and
+{{ (index .Values "nv-ingest").extraEnvVarsSecret }} must remain externally managed.

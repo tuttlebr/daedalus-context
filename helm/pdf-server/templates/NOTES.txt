@@ -1,0 +1,3 @@
+PDF server {{ include "pdf-server.fullname" . }} is available at
+http://{{ include "pdf-server.fullname" . }}:{{ .Values.service.port }} in {{ .Release.Namespace }}.
+Corpus publication remains an explicit data operation outside this release.

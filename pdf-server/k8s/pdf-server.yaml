@@ -129,6 +129,15 @@ spec:
             matchLabels:
               app.kubernetes.io/name: pdf-server
               app.kubernetes.io/instance: pdf-server
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - daedalus-06
       securityContext:
         runAsNonRoot: true
         runAsUser: 101

@@ -1,0 +1,20 @@
+{{- range $name, $claim := dict "data" .Values.persistence.data "manifests" .Values.persistence.manifests }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "url-ingest.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "url-ingest.labels" $ | nindent 4 }}
+  {{- if $claim.keep }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $claim.accessModes | nindent 4 }}
+  storageClassName: {{ $claim.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ $claim.size }}
+---
+{{- end }}

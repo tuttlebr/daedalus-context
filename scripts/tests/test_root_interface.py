@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
@@ -21,6 +23,109 @@ def make_targets() -> set[str]:
 
 
 class RootInterfaceTests(unittest.TestCase):
+    def test_nv_ingest_deploy_forwards_external_extraction_dependencies(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        required = (
+            "OCR_HTTP_ENDPOINT",
+            "YOLOX_HTTP_ENDPOINT",
+            "YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT",
+            "YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT",
+            "VLM_CAPTION_ENDPOINT",
+            "NEMOTRON_PARSE_HTTP_ENDPOINT",
+        )
+        for variable in required:
+            self.assertIn(f"nv-ingest.envVars.{variable}", makefile)
+            self.assertRegex(example, rf"(?m)^{re.escape(variable)}=$")
+
+        url_ingest = yaml.safe_load(
+            (ROOT / "helm/url-ingest/values.yaml").read_text(encoding="utf-8")
+        )
+        for collection, values in url_ingest["collections"].items():
+            self.assertLessEqual(values["pdfFileChunkSize"], 2, collection)
+
+        cronjobs = (
+            ROOT / "helm/url-ingest/templates/cronjobs.yaml"
+        ).read_text(encoding="utf-8")
+        renderer = (
+            ROOT / "url-ingest/k8s/render-manual-job.py"
+        ).read_text(encoding="utf-8")
+        cleanup_renderer = (
+            ROOT / "url-ingest/k8s/render-lock-cleanup-job.py"
+        ).read_text(encoding="utf-8")
+        deploy = (ROOT / "url-ingest/k8s/deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("GLOBAL_INGEST_CAPACITY", cronjobs)
+        self.assertIn("global-ingest-capacity-${index}.lock", cronjobs)
+        self.assertIn('"GLOBAL_INGEST_CAPACITY"', renderer)
+        self.assertIn(
+            '--global-ingest-capacity "$MAX_PARALLEL_INGEST_SHARDS"', deploy
+        )
+        self.assertIn("rmdir", cleanup_renderer)
+        self.assertIn("clear_stale_capacity_locks", deploy)
+
+    def test_all_context_releases_share_daedalus_namespace_and_have_charts(self) -> None:
+        topology = yaml.safe_load(
+            (ROOT / "stack/topology.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {release["namespace"] for release in topology["releases"].values()},
+            {"daedalus"},
+        )
+        charts = (
+            ROOT / "../daedalus-hindsight/charts/daedalus-hindsight",
+            ROOT / "helm/milvus",
+            ROOT / "nemotron-retriever",
+            ROOT / "helm/nv-ingest",
+            ROOT / "helm/pdf-server",
+            ROOT / "helm/url-ingest",
+            ROOT / "helm/k8s-mcp-server",
+            ROOT / "helm/unifi-network-mcp-server",
+        )
+        for chart in charts:
+            self.assertTrue((chart / "Chart.yaml").is_file(), chart)
+            self.assertTrue((chart / "values.yaml").is_file(), chart)
+
+    def test_incompatible_workloads_exclude_daedalus_06(self) -> None:
+        paths = (
+            ROOT / "pdf-server/k8s/pdf-server.yaml",
+            ROOT / "k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml",
+            ROOT / "unifi-network-mcp/deploy/unifi-network-mcp-server.yaml",
+        )
+        for path in paths:
+            deployments = [
+                document
+                for document in yaml.safe_load_all(path.read_text(encoding="utf-8"))
+                if document and document.get("kind") == "Deployment"
+            ]
+            self.assertEqual(len(deployments), 1, path)
+            affinity = deployments[0]["spec"]["template"]["spec"]["affinity"]
+            expressions = affinity["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"]
+            self.assertIn(
+                {
+                    "key": "kubernetes.io/hostname",
+                    "operator": "NotIn",
+                    "values": ["daedalus-06"],
+                },
+                expressions,
+                path,
+            )
+
+        milvus_values = yaml.safe_load(
+            (ROOT / "nim-milvus-ms/custom-values.yaml").read_text(encoding="utf-8")
+        )
+        expected = {
+            "key": "kubernetes.io/hostname",
+            "operator": "NotIn",
+            "values": ["daedalus-06"],
+        }
+        for affinity in (milvus_values["affinity"], milvus_values["minio"]["affinity"]):
+            expressions = affinity["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"]
+            self.assertIn(expected, expressions)
+
     def test_every_root_readme_make_command_exists(self) -> None:
         commands = set(
             re.findall(
@@ -62,9 +167,116 @@ class RootInterfaceTests(unittest.TestCase):
         for hidden in ("deploy-milvus", "compose-config", "healthcheck-agent"):
             self.assertNotRegex(result.stdout, rf"(?m)^  {re.escape(hidden)}\s")
 
+    def test_doctor_uses_the_invoking_make_when_make_is_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            env_file = temp_root / ".env"
+            env_file.write_text("# Test configuration.\n", encoding="utf-8")
+
+            kubectl = temp_root / "kubectl"
+            kubectl.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$*\" == \"config current-context\" ]]; then\n"
+                "  printf '%s\\n' test-context\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            kubectl.chmod(0o755)
+
+            docker = temp_root / "docker"
+            docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            docker.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{temp_root}:{environment['PATH']}",
+                    "MAKE": "/bin/false",
+                    "K8S_MCP_IMAGE": "example.invalid/k8s-mcp:1.0.0",
+                    "URL_INGEST_IMAGE": "example.invalid/url-ingest:1.0.0",
+                }
+            )
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "doctor",
+                    f"ENV_FILE={env_file}",
+                    f"KUBECTL={kubectl}",
+                    "JQ=true",
+                    "HELM=true",
+                    "COMPOSE=true",
+                    "EXPECTED_CONTEXT=test-context",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Doctor checks passed", result.stdout)
+
+    def test_deploy_loads_root_env_before_running_the_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            env_file = temp_root / ".env"
+            env_file.write_text(
+                "EXPECTED_CONTEXT=test-context\n"
+                "K8S_MCP_IMAGE=example.invalid/k8s-mcp:1.0.0\n",
+                encoding="utf-8",
+            )
+
+            invocation = temp_root / "invocation"
+            context = temp_root / "context"
+            image = temp_root / "image"
+            fake_make = temp_root / "make"
+            fake_make.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "printf '%s\\n' \"$*\" > \"$TEST_INVOCATION\"\n"
+                "printf '%s\\n' \"${EXPECTED_CONTEXT:-}\" > \"$TEST_CONTEXT\"\n"
+                "printf '%s\\n' \"${K8S_MCP_IMAGE:-}\" > \"$TEST_IMAGE\"\n",
+                encoding="utf-8",
+            )
+            fake_make.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TEST_INVOCATION": str(invocation),
+                    "TEST_CONTEXT": str(context),
+                    "TEST_IMAGE": str(image),
+                }
+            )
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "deploy",
+                    f"ENV_FILE={env_file}",
+                    f"MAKE_COMMAND={fake_make}",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                invocation.read_text(encoding="utf-8").strip(),
+                "--no-print-directory deploy-workflow",
+            )
+            self.assertEqual(context.read_text(encoding="utf-8").strip(), "test-context")
+            self.assertEqual(
+                image.read_text(encoding="utf-8").strip(),
+                "example.invalid/k8s-mcp:1.0.0",
+            )
+
     def test_compose_runtime_targets_are_removed(self) -> None:
         removed = {"compose-up", "compose-down", "compose-crawl", "compose-ingest"}
         self.assertTrue(removed.isdisjoint(make_targets()))
+
         tracked = subprocess.run(
             ["git", "ls-files", "*.md"],
             cwd=ROOT,
@@ -84,6 +296,15 @@ class RootInterfaceTests(unittest.TestCase):
         )
         for target in removed:
             self.assertNotIn(target, markdown)
+
+    def test_legacy_cleanup_wipes_exact_path_before_deleting_pv(self) -> None:
+        cleanup = (ROOT / "scripts/cleanup-legacy-stack.sh").read_text(
+            encoding="utf-8"
+        )
+        wait_for_cleaner = 'wait pod/"$cleaner"'
+        delete_pv = 'delete pv "$pv"'
+        self.assertIn('add: ["DAC_OVERRIDE", "FOWNER"]', cleanup)
+        self.assertLess(cleanup.index(wait_for_cleaner), cleanup.index(delete_pv))
 
     def test_image_compatibility_aliases_are_explicit(self) -> None:
         source = MAKEFILE.read_text(encoding="utf-8")

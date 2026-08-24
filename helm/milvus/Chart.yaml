@@ -1,0 +1,10 @@
+apiVersion: v2
+name: daedalus-milvus
+description: Daedalus-owned wrapper around the pinned upstream Milvus chart
+type: application
+version: 0.1.0
+appVersion: "2.6.11"
+dependencies:
+  - name: milvus
+    version: 5.0.14
+    repository: https://zilliztech.github.io/milvus-helm

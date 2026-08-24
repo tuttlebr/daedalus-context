@@ -490,16 +490,21 @@ func (c *Client) DiagnoseGPUScheduling(ctx context.Context, podName, namespace s
 }
 
 // GetGPUOperatorHealth checks the health of the NVIDIA GPU operator and device plugin.
-func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace, gpuOperatorNamespace string, logLines int) (map[string]interface{}, error) {
+func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace, gpuOperatorNamespace string, logLines, sinceSeconds int) (map[string]interface{}, error) {
+	if err := validateLogQuery(logLines, sinceSeconds); err != nil {
+		return nil, err
+	}
+	observedAt := time.Now().UTC()
 	result := map[string]interface{}{
 		"healthy":        true,
 		"detectedIssues": []map[string]interface{}{},
+		"logWindow":      logWindowMetadata(observedAt, logLines, sinceSeconds),
 	}
 
 	detectedIssues := []map[string]interface{}{}
 
 	// 1. Device plugin daemonset health
-	dpInfo := c.getDevicePluginHealth(ctx, devicePluginNamespace, logLines)
+	dpInfo := c.getDevicePluginHealth(ctx, devicePluginNamespace, logLines, sinceSeconds)
 	result["devicePlugin"] = dpInfo
 	if dpHealthy, ok := dpInfo["healthy"].(bool); ok && !dpHealthy {
 		result["healthy"] = false
@@ -509,7 +514,7 @@ func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace
 	}
 
 	// 2. GPU operator deployment health
-	opInfo := c.getGPUOperatorDeploymentHealth(ctx, gpuOperatorNamespace, logLines)
+	opInfo := c.getGPUOperatorDeploymentHealth(ctx, gpuOperatorNamespace, logLines, sinceSeconds)
 	result["gpuOperator"] = opInfo
 	if opHealthy, ok := opInfo["healthy"].(bool); ok && !opHealthy {
 		result["healthy"] = false
@@ -801,7 +806,7 @@ func (c *Client) getGPURelatedEvents(ctx context.Context) []map[string]interface
 }
 
 // getDevicePluginHealth checks the NVIDIA device plugin health with logs.
-func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, logLines int) map[string]interface{} {
+func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, logLines, sinceSeconds int) map[string]interface{} {
 	info := map[string]interface{}{
 		"healthy": true,
 	}
@@ -828,8 +833,6 @@ func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, lo
 	info["podCount"] = len(dpPods.Items)
 	podDetails := []map[string]interface{}{}
 	detectedIssues := []map[string]interface{}{}
-
-	tailLines := int64(logLines)
 
 	for i := range dpPods.Items {
 		pod := &dpPods.Items[i]
@@ -859,9 +862,7 @@ func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, lo
 		detail["ready"] = ready
 
 		// Get recent logs
-		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-			TailLines: &tailLines,
-		})
+		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, newPodLogOptions("", logLines, sinceSeconds))
 		logStream, err := logReq.Stream(ctx)
 		if err == nil {
 			buf := make([]byte, 64*1024)
@@ -896,7 +897,7 @@ func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, lo
 }
 
 // getGPUOperatorDeploymentHealth checks the GPU operator deployment health with logs.
-func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace string, logLines int) map[string]interface{} {
+func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace string, logLines, sinceSeconds int) map[string]interface{} {
 	info := map[string]interface{}{
 		"healthy": true,
 	}
@@ -927,8 +928,6 @@ func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace s
 	podDetails := []map[string]interface{}{}
 	detectedIssues := []map[string]interface{}{}
 
-	tailLines := int64(logLines)
-
 	for i := range opPods.Items {
 		pod := &opPods.Items[i]
 		detail := map[string]interface{}{
@@ -950,9 +949,7 @@ func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace s
 		detail["ready"] = ready
 
 		// Get recent logs
-		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-			TailLines: &tailLines,
-		})
+		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, newPodLogOptions("", logLines, sinceSeconds))
 		logStream, err := logReq.Stream(ctx)
 		if err == nil {
 			buf := make([]byte, 64*1024)

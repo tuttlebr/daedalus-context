@@ -1,43 +1,56 @@
 apiVersion: daedalus.context/v1
 kind: ComponentLock
-generatedAt: "2026-07-29T00:00:00Z"
+generatedAt: "2026-08-24T00:00:00Z"
 components:
+  hindsight:
+    source: ../daedalus-hindsight/charts/daedalus-hindsight
+    sourceRevision: pending-uncommitted-working-tree
+    chartVersion: 0.2.1
+    applicationVersion: 0.9.1
+    images:
+      api: ghcr.io/vectorize-io/hindsight-api:0.9.1
+      controlPlane: ghcr.io/vectorize-io/hindsight-control-plane:0.9.1
+      postgresql: pgvector/pgvector:0.8.6-pg18
+    imageDigests:
+      api: sha256:24a079bead8aa58e45d728bf535ea727bfe559d8784024b6b9f89d56646954ab
+      controlPlane: sha256:4f83fa7ae5c55461bc55cd3da1056305df8b6b9325503e2875f069c735efafad
+      postgresql: sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
   milvus:
-    source: nim-milvus-ms
-    sourceRevision: pending-implementation-commit
+    source: helm/milvus
+    sourceRevision: pending-uncommitted-working-tree
     chart: zilliztech/milvus
     chartVersion: 5.0.14
     applicationVersion: 2.6.11
     image: milvusdb/milvus:v2.6.11
   retriever:
     source: nemotron-retriever
-    sourceRevision: pending-implementation-commit
-    chartVersion: 0.3.0
+    sourceRevision: pending-uncommitted-working-tree
+    chartVersion: 0.3.2
     images:
       vllm: vllm/vllm-openai:v0.17.0
       adapter: python:3.12.11-alpine3.22
   nv-ingest:
-    source: nv-ingest
-    sourceRevision: pending-implementation-commit
+    source: helm/nv-ingest
+    sourceRevision: pending-uncommitted-working-tree
     chartVersion: 26.3.0
     image: nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
   pdf-server:
-    source: pdf-server
-    sourceRevision: pending-implementation-commit
+    source: helm/pdf-server
+    sourceRevision: pending-uncommitted-working-tree
     image: daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0
   url-ingest:
-    source: url-ingest
-    sourceRevision: pending-implementation-commit
+    source: helm/url-ingest
+    sourceRevision: pending-uncommitted-working-tree
     images:
       crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
       runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
   k8s-mcp:
-    source: k8s-multicluster-mcp
-    sourceRevision: pending-implementation-commit
+    source: helm/k8s-mcp-server
+    sourceRevision: pending-uncommitted-working-tree
     image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0
   unifi-mcp:
-    source: unifi-network-mcp
-    sourceRevision: pending-implementation-commit
+    source: helm/unifi-network-mcp-server
+    sourceRevision: pending-uncommitted-working-tree
     image: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0
 models:
   embedding:

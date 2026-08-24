@@ -5,7 +5,7 @@ profile: all
 production: false
 ragReadinessMode: degraded
 requiredCollections: []
-namespaceMode: independent
+namespaceMode: shared
 acceptance:
   status: development-only
   haPhaseBlocked: true

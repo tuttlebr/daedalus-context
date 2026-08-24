@@ -5,7 +5,7 @@ profile: all
 production: true
 ragReadinessMode: degraded
 requiredCollections: [nvidia, kubernetes, vetpartner, semianalysis, mentalhealth]
-namespaceMode: independent
+namespaceMode: shared
 storage:
   etcdStorageClass: local-etcd
   minioStorageClass: nfs-client

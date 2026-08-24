@@ -78,18 +78,16 @@ func GetGPUOperatorHealth(client *k8s.Client) func(ctx context.Context, request 
 		devicePluginNamespace := getStringArg(args, "devicePluginNamespace", "kube-system")
 		gpuOperatorNamespace := getStringArg(args, "gpuOperatorNamespace", "gpu-operator")
 
-		// Handle logLines as either float64 or int
-		logLines := 100
-		if val, ok := args["logLines"]; ok {
-			switch v := val.(type) {
-			case float64:
-				logLines = int(v)
-			case int:
-				logLines = v
-			}
+		logLines, err := getBoundedIntArg(args, "logLines", k8s.DefaultPodLogTailLines, 1, k8s.MaxLogTailLines)
+		if err != nil {
+			return nil, err
+		}
+		sinceSeconds, err := getBoundedIntArg(args, "sinceSeconds", k8s.DefaultLogSinceSeconds, 1, k8s.MaxLogSinceSeconds)
+		if err != nil {
+			return nil, err
 		}
 
-		health, err := client.GetGPUOperatorHealth(ctx, devicePluginNamespace, gpuOperatorNamespace, logLines)
+		health, err := client.GetGPUOperatorHealth(ctx, devicePluginNamespace, gpuOperatorNamespace, logLines, sinceSeconds)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get GPU operator health: %w", err)
 		}

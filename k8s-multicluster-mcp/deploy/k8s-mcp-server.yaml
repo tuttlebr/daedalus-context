@@ -181,6 +181,15 @@ spec:
           labelSelector:
             matchLabels:
               app: k8s-mcp-server
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - daedalus-06
       containers:
         - name: k8s-mcp-server
           image: __K8S_MCP_IMAGE__

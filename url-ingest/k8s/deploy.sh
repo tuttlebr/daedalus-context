@@ -31,6 +31,7 @@ STAGE_DATA=false
 RUN_NOW=false
 RUN_CRAWL=false
 RENDER_ONLY=false
+DEPLOY_RESOURCES=true
 RUN_COLLECTIONS=""
 
 load_env_file() {
@@ -64,6 +65,10 @@ while [[ $# -gt 0 ]]; do
             RENDER_ONLY=true
             shift
             ;;
+        --data-only)
+            DEPLOY_RESOURCES=false
+            shift
+            ;;
         --run-now)
             RUN_NOW=true
             shift
@@ -79,7 +84,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--stage-data] [--seed-data] [--run-now [COLLECTION...]] [--run-crawl] [--render-only]"
+            echo "Usage: $0 [--stage-data] [--seed-data] [--run-now [COLLECTION...]] [--run-crawl] [--render-only] [--data-only]"
             echo "Collections: $ALL_COLLECTIONS"
             exit 1
             ;;
@@ -183,15 +188,15 @@ if [[ "$RUN_NOW" == true ]]; then
     RUN_COLLECTIONS="$normalized_collections"
 fi
 
-# Staging rewrites the shared input PVC for every collection, so it must own
-# every collection lock even when the caller will ingest only a subset. A
-# run-only operation needs locks only for its requested collections.
+# Staging rewrites the shared input PVC, and ingestion coordinates through one
+# global semaphore on the manifest PVC. Both operations therefore own every
+# collection lock while they stage, recover stale capacity slots, or ingest.
 OPERATION_COLLECTIONS="$RUN_COLLECTIONS"
-if [[ "$STAGE_DATA" == true ]]; then
+if [[ "$STAGE_DATA" == true || "$RUN_NOW" == true ]]; then
     OPERATION_COLLECTIONS="$ALL_COLLECTIONS"
 fi
 
-echo "=== Deploying url-ingest to namespace: $NAMESPACE ==="
+echo "=== Operating url-ingest in namespace: $NAMESPACE ==="
 
 escape_sed_replacement() {
     printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
@@ -211,7 +216,7 @@ render_manifest() {
     prune="$(escape_sed_replacement "$PRUNE_STAGED_DATA")"
     if [[ "$(basename "$1")" =~ ^cronjob-([a-z0-9_-]+)\.yaml$ ]]; then
         collection="${BASH_REMATCH[1]}"
-        if [[ "$RUN_NOW" == true && " $RUN_COLLECTIONS " =~ " $collection " ]]; then
+        if [[ "$RUN_NOW" == true && " $OPERATION_COLLECTIONS " =~ " $collection " ]]; then
             suspend_for_operation=true
         elif [[ "$RENDER_ONLY" != true ]] && kubectl --namespace="$NAMESPACE" get \
             "configmap/url-ingest-${collection}-run-lock" >/dev/null 2>&1; then
@@ -333,13 +338,19 @@ case "$source_secret_type" in
         ;;
 esac
 
-echo "Configuring workload service accounts..."
-apply_manifest "$SCRIPT_DIR/serviceaccount.yaml"
+if [[ "$DEPLOY_RESOURCES" == true ]]; then
+    echo "Configuring workload service accounts..."
+    apply_manifest "$SCRIPT_DIR/serviceaccount.yaml"
 
-# 2. Create URL-ingest-owned PVCs. The pdf-server release independently owns
-# its ServiceAccount, PVC, Deployment, Service, PDB, and NetworkPolicy.
-echo "Creating PVCs..."
-apply_manifest "$SCRIPT_DIR/pvc.yaml"
+    # Create URL-ingest-owned PVCs. The pdf-server release independently owns
+    # its ServiceAccount, PVC, Deployment, Service, PDB, and NetworkPolicy.
+    echo "Creating PVCs..."
+    apply_manifest "$SCRIPT_DIR/pvc.yaml"
+else
+    kubectl --namespace="$NAMESPACE" get serviceaccount/url-ingest \
+        persistentvolumeclaim/url-ingest-data \
+        persistentvolumeclaim/url-ingest-manifests >/dev/null
+fi
 
 # 3. Create secret (from .env values)
 echo "Creating secret..."
@@ -352,21 +363,18 @@ kubectl create secret generic url-ingest-secret \
     --from-literal="MILVUS_PASSWORD=${MILVUS_ROOT_PASSWORD}" \
     --dry-run=client -o yaml | kubectl apply -f -
 
-# 4. Create ConfigMaps for URL lists
-echo "Creating URL list ConfigMaps..."
-# Small lists (inline YAML)
-apply_manifest "$SCRIPT_DIR/configmap-url-lists.yaml"
-
-# Large lists (from file, using server-side apply to avoid annotation size limit)
-kubectl create configmap url-ingest-k8s-urls \
-    --namespace="$NAMESPACE" \
-    --from-file=k8s_url_links.txt="$PROJECT_DIR/files/k8s_url_links.txt" \
-    --dry-run=client -o yaml | kubectl apply --server-side -f -
-
-kubectl create configmap url-ingest-vetpartner-urls \
-    --namespace="$NAMESPACE" \
-    --from-file=vetpartner_url_links.txt="$PROJECT_DIR/files/vetpartner_url_links.txt" \
-    --dry-run=client -o yaml | kubectl apply --server-side -f -
+if [[ "$DEPLOY_RESOURCES" == true ]]; then
+    echo "Creating URL list ConfigMaps..."
+    apply_manifest "$SCRIPT_DIR/configmap-url-lists.yaml"
+    kubectl create configmap url-ingest-k8s-urls \
+        --namespace="$NAMESPACE" \
+        --from-file=k8s_url_links.txt="$PROJECT_DIR/files/k8s_url_links.txt" \
+        --dry-run=client -o yaml | kubectl apply --server-side -f -
+    kubectl create configmap url-ingest-vetpartner-urls \
+        --namespace="$NAMESPACE" \
+        --from-file=vetpartner_url_links.txt="$PROJECT_DIR/files/vetpartner_url_links.txt" \
+        --dry-run=client -o yaml | kubectl apply --server-side -f -
+fi
 
 # Install cleanup before applying temporarily suspended CronJobs so a partial
 # reconcile cannot leave the schedules disabled.
@@ -375,9 +383,46 @@ declare -a RESTORE_CRONJOBS=()
 declare -a RUN_JOBS=()
 declare -A RESTORE_CRONJOB_STATES=()
 SHOW_COMPLETION_STATUS=false
+CAPACITY_LOCK_CLEANUP_JOB=url-ingest-capacity-lock-cleanup
+
+clear_stale_capacity_locks() {
+    local conditions
+    if kubectl --namespace="$NAMESPACE" get \
+        "job/$CAPACITY_LOCK_CLEANUP_JOB" >/dev/null 2>&1; then
+        conditions="$(kubectl --namespace="$NAMESPACE" get \
+            "job/$CAPACITY_LOCK_CLEANUP_JOB" \
+            -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}')"
+        if ! grep -Eq '^(Complete|Failed)=True' <<<"$conditions"; then
+            echo "ERROR: refusing to replace non-terminal job/$CAPACITY_LOCK_CLEANUP_JOB." >&2
+            return 1
+        fi
+        if ! kubectl --namespace="$NAMESPACE" delete \
+            "job/$CAPACITY_LOCK_CLEANUP_JOB" --wait=true >/dev/null; then
+            return 1
+        fi
+    fi
+    echo "Clearing empty stale ingestion capacity locks..."
+    if ! kubectl --namespace="$NAMESPACE" get cronjob/url-ingest-nvidia -o json | \
+        python3 "$SCRIPT_DIR/render-lock-cleanup-job.py" \
+            --name "$CAPACITY_LOCK_CLEANUP_JOB" \
+            --namespace "$NAMESPACE" | \
+        kubectl --namespace="$NAMESPACE" create -f - >/dev/null; then
+        return 1
+    fi
+    RUN_JOBS+=("$CAPACITY_LOCK_CLEANUP_JOB")
+    if ! wait_for_jobs "$NAMESPACE" 300 "$INGEST_POLL_SECONDS" \
+        "$CAPACITY_LOCK_CLEANUP_JOB"; then
+        return 1
+    fi
+    if ! kubectl --namespace="$NAMESPACE" delete \
+        "job/$CAPACITY_LOCK_CLEANUP_JOB" --wait=true >/dev/null; then
+        return 1
+    fi
+}
 
 cleanup_operations() {
-    local original_status=$? cronjob lock job conditions pods desired_state safe_to_release=true
+    local original_status=$? cronjob lock job conditions pods desired_state
+    local safe_to_release=true stopped_run_job=false
     trap - EXIT
     set +e
     if (( original_status != 0 )); then
@@ -395,6 +440,8 @@ cleanup_operations() {
                 --ignore-not-found --wait=true --timeout=2m >/dev/null; then
                 safe_to_release=false
                 echo "ERROR: could not stop job/$job." >&2
+            else
+                stopped_run_job=true
             fi
             pods="$(kubectl --namespace="$NAMESPACE" get pods \
                 --selector="job-name=$job" -o name 2>/dev/null)"
@@ -405,6 +452,11 @@ cleanup_operations() {
                 echo "ERROR: pods for job/$job did not terminate." >&2
             fi
         done
+    fi
+    if [[ "$safe_to_release" == true && "$stopped_run_job" == true ]] && \
+        ! clear_stale_capacity_locks; then
+        safe_to_release=false
+        echo "ERROR: could not clear stale ingestion capacity locks." >&2
     fi
     if [[ "$safe_to_release" != true ]]; then
         echo "Ingestion locks and CronJob suspension were retained to prevent overlap." >&2
@@ -471,13 +523,14 @@ if [[ -n "$OPERATION_COLLECTIONS" ]]; then
     done
 fi
 
-# 6. Create CronJobs
-echo "Creating CronJobs..."
-apply_manifest "$SCRIPT_DIR/cronjob-nvidia.yaml"
-apply_manifest "$SCRIPT_DIR/cronjob-kubernetes.yaml"
-apply_manifest "$SCRIPT_DIR/cronjob-vetpartner.yaml"
-apply_manifest "$SCRIPT_DIR/cronjob-semianalysis.yaml"
-apply_manifest "$SCRIPT_DIR/cronjob-mentalhealth.yaml"
+if [[ "$DEPLOY_RESOURCES" == true ]]; then
+    echo "Creating CronJobs..."
+    apply_manifest "$SCRIPT_DIR/cronjob-nvidia.yaml"
+    apply_manifest "$SCRIPT_DIR/cronjob-kubernetes.yaml"
+    apply_manifest "$SCRIPT_DIR/cronjob-vetpartner.yaml"
+    apply_manifest "$SCRIPT_DIR/cronjob-semianalysis.yaml"
+    apply_manifest "$SCRIPT_DIR/cronjob-mentalhealth.yaml"
+fi
 
 # Operation coordination ----------------------------------------------------
 
@@ -555,6 +608,7 @@ create_manual_job() {
         --run-id "$run_id"
         --shard-index "$shard_index"
         --shard-count "$shard_count"
+        --global-ingest-capacity "$MAX_PARALLEL_INGEST_SHARDS"
         --client-image "$URL_INGEST_RUNNER_IMAGE"
         --milvus-uri "$MILVUS_URI"
         --minio-endpoint "$MINIO_ENDPOINT"
@@ -579,7 +633,8 @@ create_manual_job() {
 
 run_collection() {
     local collection="$1" shard_count=1 shard_index shard_id job_name verify_name start_index=0
-    local -a batch=()
+    local completed_job
+    local -a active_jobs=() remaining_jobs=()
     if [[ "$collection" == nvidia ]]; then
         shard_count="$NVIDIA_INGEST_SHARDS"
     fi
@@ -595,15 +650,31 @@ run_collection() {
         start_index=1
     fi
     for ((shard_index = start_index; shard_index < shard_count; shard_index++)); do
+        while (( ${#active_jobs[@]} >= MAX_PARALLEL_INGEST_SHARDS )); do
+            wait_for_any_job "$NAMESPACE" "$INGEST_WAIT_TIMEOUT_SECONDS" \
+                "$INGEST_POLL_SECONDS" "${active_jobs[@]}"
+            completed_job="$WAIT_FOR_ANY_COMPLETED_JOB"
+            remaining_jobs=()
+            for job_name in "${active_jobs[@]}"; do
+                [[ "$job_name" == "$completed_job" ]] || remaining_jobs+=("$job_name")
+            done
+            active_jobs=("${remaining_jobs[@]}")
+        done
         printf -v shard_id '%02d' "$shard_index"
         job_name="url-ingest-${collection}-${RUN_ID}-s${shard_id}"
         create_manual_job "$job_name" "$collection" \
             "${RUN_ID}-s${shard_id}" "$shard_index" "$shard_count" false
-        batch+=("$job_name")
-        if (( ${#batch[@]} >= MAX_PARALLEL_INGEST_SHARDS || shard_index + 1 == shard_count )); then
-            wait_for_jobs "$NAMESPACE" "$INGEST_WAIT_TIMEOUT_SECONDS" "$INGEST_POLL_SECONDS" "${batch[@]}"
-            batch=()
-        fi
+        active_jobs+=("$job_name")
+    done
+    while (( ${#active_jobs[@]} > 0 )); do
+        wait_for_any_job "$NAMESPACE" "$INGEST_WAIT_TIMEOUT_SECONDS" \
+            "$INGEST_POLL_SECONDS" "${active_jobs[@]}"
+        completed_job="$WAIT_FOR_ANY_COMPLETED_JOB"
+        remaining_jobs=()
+        for job_name in "${active_jobs[@]}"; do
+            [[ "$job_name" == "$completed_job" ]] || remaining_jobs+=("$job_name")
+        done
+        active_jobs=("${remaining_jobs[@]}")
     done
 
     verify_name="url-ingest-${collection}-${RUN_ID}-verify"
@@ -650,7 +721,7 @@ fi
 # collection. No successful command can silently skip a missing CronJob.
 if [[ "$RUN_NOW" == true ]]; then
     wait_for_ingest_dependencies
-    for collection in $RUN_COLLECTIONS; do
+    for collection in $OPERATION_COLLECTIONS; do
         cronjob="url-ingest-${collection}"
         kubectl --namespace="$NAMESPACE" get "cronjob/$cronjob" >/dev/null
         suspend_cronjob "$cronjob"
@@ -661,6 +732,7 @@ if [[ "$RUN_NOW" == true ]]; then
             exit 1
         fi
     done
+    clear_stale_capacity_locks
 
     for collection in $RUN_COLLECTIONS; do
         run_collection "$collection"

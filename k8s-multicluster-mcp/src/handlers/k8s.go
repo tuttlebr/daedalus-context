@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+	"time"
 
 	"github.com/tuttlebr/kubernetes-mcp-server/pkg/k8s"
 
@@ -61,6 +64,44 @@ func getIntArg(args map[string]interface{}, key string, defaultValue int) int {
 		return v
 	}
 	return defaultValue
+}
+
+func getBoundedIntArg(args map[string]interface{}, key string, defaultValue, minimum, maximum int) (int, error) {
+	value, ok := args[key]
+	if !ok {
+		return defaultValue, nil
+	}
+
+	var parsed int
+	switch typed := value.(type) {
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed {
+			return 0, fmt.Errorf("parameter %s must be a whole number", key)
+		}
+		parsed = int(typed)
+	case int:
+		parsed = typed
+	default:
+		return 0, fmt.Errorf("parameter %s must be a number", key)
+	}
+
+	if parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("parameter %s must be between %d and %d", key, minimum, maximum)
+	}
+	return parsed, nil
+}
+
+func formatPodLogs(logs string, observedAt time.Time, sinceSeconds, tailLines int) string {
+	observedAt = observedAt.UTC()
+	windowStart := observedAt.Add(-time.Duration(sinceSeconds) * time.Second)
+	header := fmt.Sprintf(
+		"Log query window: %s through %s (last %d seconds); at most %d lines per container. Every returned log line starts with its Kubernetes timestamp.\n",
+		windowStart.Format(time.RFC3339Nano), observedAt.Format(time.RFC3339Nano), sinceSeconds, tailLines,
+	)
+	if strings.TrimSpace(logs) == "" {
+		return header + "No log entries were returned for this time window.\n"
+	}
+	return header + logs
 }
 
 func getStringArrayArg(args map[string]interface{}, key string) []string {
@@ -228,7 +269,7 @@ func DescribeResources(client *k8s.Client) func(ctx context.Context, request mcp
 
 // GetPodsLogs returns a handler function for the getPodsLogs tool.
 // It retrieves logs for a specific pod from the Kubernetes cluster based on the
-// provided name and namespace. The result is serialized to JSON and returned.
+// provided name and namespace. The result includes the query window and logs as text.
 func GetPodsLogs(client *k8s.Client) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, ok := request.Params.Arguments.(map[string]interface{})
@@ -247,14 +288,23 @@ func GetPodsLogs(client *k8s.Client) func(ctx context.Context, request mcp.CallT
 		}
 
 		containerName := getStringArg(args, "containerName", "")
+		sinceSeconds, err := getBoundedIntArg(args, "sinceSeconds", k8s.DefaultLogSinceSeconds, 1, k8s.MaxLogSinceSeconds)
+		if err != nil {
+			return nil, err
+		}
+		tailLines, err := getBoundedIntArg(args, "tailLines", k8s.DefaultPodLogTailLines, 1, k8s.MaxLogTailLines)
+		if err != nil {
+			return nil, err
+		}
 
-		logs, err := client.GetPodsLogs(ctx, namespace, containerName, name)
+		observedAt := time.Now().UTC()
+		logs, err := client.GetPodsLogs(ctx, namespace, containerName, name, tailLines, sinceSeconds)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get logs for pod '%s': %w", name, err)
 		}
 
 		// Return logs as plain text instead of JSON for better readability.
-		return mcp.NewToolResultText(k8s.SanitizeText(logs)), nil
+		return mcp.NewToolResultText(k8s.SanitizeText(formatPodLogs(logs, observedAt, sinceSeconds, tailLines))), nil
 	}
 }
 
@@ -793,18 +843,20 @@ func GetPodDebugInfo(client *k8s.Client) func(ctx context.Context, request mcp.C
 
 		includeLogs := getBoolArg(args, "includeLogs", true)
 
-		// Handle logLines as either float64 or int
-		logLines := 50
-		if val, ok := args["logLines"]; ok {
-			switch v := val.(type) {
-			case float64:
-				logLines = int(v)
-			case int:
-				logLines = v
+		logLines := k8s.DefaultDebugLogLines
+		sinceSeconds := k8s.DefaultLogSinceSeconds
+		if includeLogs {
+			logLines, err = getBoundedIntArg(args, "logLines", logLines, 1, k8s.MaxLogTailLines)
+			if err != nil {
+				return nil, err
+			}
+			sinceSeconds, err = getBoundedIntArg(args, "sinceSeconds", sinceSeconds, 1, k8s.MaxLogSinceSeconds)
+			if err != nil {
+				return nil, err
 			}
 		}
 
-		debugInfo, err := client.GetPodDebugInfo(ctx, name, namespace, includeLogs, logLines)
+		debugInfo, err := client.GetPodDebugInfo(ctx, name, namespace, includeLogs, logLines, sinceSeconds)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get pod debug info: %w", err)
 		}
