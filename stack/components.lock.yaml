@@ -4,7 +4,7 @@ generatedAt: "2026-08-24T00:00:00Z"
 components:
   hindsight:
     source: ../daedalus-hindsight/charts/daedalus-hindsight
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 7aa48a767ced13cff5df464b013751ed0542abad
     chartVersion: 0.2.1
     applicationVersion: 0.9.1
     images:
@@ -17,40 +17,40 @@ components:
       postgresql: sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
   milvus:
     source: helm/milvus
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chart: zilliztech/milvus
     chartVersion: 5.0.14
     applicationVersion: 2.6.11
     image: milvusdb/milvus:v2.6.11
   retriever:
     source: nemotron-retriever
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chartVersion: 0.3.2
     images:
       vllm: vllm/vllm-openai:v0.17.0
       adapter: python:3.12.11-alpine3.22
   nv-ingest:
     source: helm/nv-ingest
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chartVersion: 26.3.0
     image: nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
   pdf-server:
     source: helm/pdf-server
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     image: daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0
   url-ingest:
     source: helm/url-ingest
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     images:
       crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
       runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
   k8s-mcp:
     source: helm/k8s-mcp-server
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0
   unifi-mcp:
     source: helm/unifi-network-mcp-server
-    sourceRevision: pending-uncommitted-working-tree
+    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     image: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0
 models:
   embedding:
