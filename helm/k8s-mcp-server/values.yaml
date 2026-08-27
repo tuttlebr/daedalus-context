@@ -25,7 +25,7 @@ service:
   port: 8080
   external:
     enabled: false
-    nodePort: 30080
+    nodePort: 30800
     loadBalancerClass: daedalus.ai/nodeport-only
     sourceRanges: []
 resources:
