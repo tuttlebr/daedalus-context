@@ -18,23 +18,26 @@ type ToolDefaults struct {
 	ConnectionLocked             bool
 }
 
-// EndpointTool creates an MCP tool schema for a read-only UniFi endpoint.
+// EndpointTool creates an MCP tool schema for a UniFi endpoint.
 func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 	description := endpoint.Description
 	if defaults.ConnectionLocked {
 		description += " Uses the deployment's fixed UniFi controller and server-side credential."
 	} else {
-		description += " The client may provide baseUrl and apiKey for this read-only request."
+		description += " The client may provide baseUrl and apiKey for this request."
 	}
 	if !defaults.ConnectionLocked && (defaults.HasBaseURLDefault || defaults.HasAPIKeyDefault) {
 		description += " Configured server-side defaults are used for omitted connection fields."
 	}
+	if endpoint.Destructive {
+		description += " This operation changes or removes controller-managed state; review the arguments before confirming the tool call."
+	}
 
 	options := []mcp.ToolOption{
 		mcp.WithDescription(description),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithReadOnlyHintAnnotation(endpoint.IsReadOnly()),
+		mcp.WithDestructiveHintAnnotation(endpoint.Destructive),
+		mcp.WithIdempotentHintAnnotation(endpoint.IsIdempotent()),
 		mcp.WithOpenWorldHintAnnotation(true),
 		withInteger(
 			"timeoutSeconds",
@@ -79,11 +82,11 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 	}
 
 	for _, param := range endpoint.PathParams {
-		options = append(options, mcp.WithString(
-			param,
-			mcp.Required(),
-			mcp.Description(fmt.Sprintf("Required path parameter %q for %s.", param, endpoint.Path)),
-		))
+		schema := endpoint.PathParameterSchema(param)
+		if schema.Description == "" {
+			schema.Description = fmt.Sprintf("Required path parameter %q for %s.", param, endpoint.Path)
+		}
+		options = append(options, withParameter(param, schema, true))
 	}
 
 	if endpoint.SupportsPagination {
@@ -95,12 +98,14 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 				"Optional pagination offset. UniFi default is 0.",
 				0,
 				0,
+				"int32",
 			),
 			withInteger(
 				"limit",
 				fmt.Sprintf("Optional pagination limit. UniFi default is %d; documented maximum is %d.", defaultLimit, maximumLimit),
 				0,
 				maximumLimit,
+				"int32",
 			),
 		)
 	}
@@ -113,19 +118,75 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 	}
 
 	for _, param := range endpoint.QueryParams {
-		paramOptions := []mcp.PropertyOption{mcp.Description(param.Description)}
-		if param.Required {
-			paramOptions = append(paramOptions, mcp.Required())
+		schema := param.Schema
+		if schema.Description == "" {
+			schema.Description = param.Description
 		}
-		options = append(options, mcp.WithString(param.Name, paramOptions...))
+		if schema.Description == "" {
+			schema.Description = fmt.Sprintf("Documented query parameter %q for %s.", param.Name, endpoint.Path)
+		}
+		options = append(options, withParameter(param.Name, schema, param.Required))
+	}
+	if endpoint.RequestBody != nil {
+		options = append(options, withRequestBody(endpoint.RequestBody))
 	}
 
 	return mcp.NewTool(endpoint.Name, options...)
 }
 
+func withParameter(name string, parameter unifi.ParameterSchema, required bool) mcp.ToolOption {
+	return func(tool *mcp.Tool) {
+		parameterType := strings.TrimSpace(parameter.Type)
+		if parameterType == "" {
+			parameterType = "string"
+		}
+		schema := map[string]any{
+			"type": parameterType,
+		}
+		if parameter.Format != "" {
+			schema["format"] = parameter.Format
+		}
+		if parameter.Description != "" {
+			schema["description"] = parameter.Description
+		}
+		if parameter.Default != nil {
+			schema["default"] = parameter.Default
+		}
+		if parameter.Minimum != nil {
+			schema["minimum"] = *parameter.Minimum
+		}
+		if parameter.Maximum != nil {
+			schema["maximum"] = *parameter.Maximum
+		}
+		tool.InputSchema.Properties[name] = schema
+		if required {
+			tool.InputSchema.Required = append(tool.InputSchema.Required, name)
+		}
+	}
+}
+
+func withRequestBody(requestBody *unifi.RequestBody) mcp.ToolOption {
+	return func(tool *mcp.Tool) {
+		schema := make(map[string]any, len(requestBody.Schema)+1)
+		for key, value := range requestBody.Schema {
+			schema[key] = value
+		}
+		if _, exists := schema["description"]; !exists && requestBody.Description != "" {
+			schema["description"] = requestBody.Description
+		}
+		tool.InputSchema.Properties["body"] = schema
+		if requestBody.Required {
+			tool.InputSchema.Required = append(tool.InputSchema.Required, "body")
+		}
+		if len(requestBody.Definitions) > 0 {
+			tool.InputSchema.Defs = requestBody.Definitions
+		}
+	}
+}
+
 // withInteger adds the integer JSON Schema type that mcp-go's convenience
 // builders do not currently expose. A maximum of zero means unbounded.
-func withInteger(name, description string, minimum, maximum int) mcp.ToolOption {
+func withInteger(name, description string, minimum, maximum int, formats ...string) mcp.ToolOption {
 	return func(tool *mcp.Tool) {
 		schema := map[string]any{
 			"type":        "integer",
@@ -135,11 +196,14 @@ func withInteger(name, description string, minimum, maximum int) mcp.ToolOption 
 		if maximum > 0 {
 			schema["maximum"] = maximum
 		}
+		if len(formats) > 0 && formats[0] != "" {
+			schema["format"] = formats[0]
+		}
 		tool.InputSchema.Properties[name] = schema
 	}
 }
 
-// EndpointTools returns MCP tool schemas for every read-only UniFi endpoint.
+// EndpointTools returns MCP tool schemas for every UniFi endpoint.
 func EndpointTools() []mcp.Tool {
 	endpoints := unifi.Endpoints()
 	result := make([]mcp.Tool, 0, len(endpoints))

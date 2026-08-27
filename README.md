@@ -96,7 +96,7 @@ The dependency graph is declared in `stack/topology.yaml`.
 | `pdf-server` | `helm/pdf-server/` | `daedalus` | Versioned, read-only source PDF corpus |
 | `url-ingest` | `helm/url-ingest/` | `daedalus` | Scheduled and manual collection population |
 | `k8s-mcp` | `helm/k8s-mcp-server/` | `daedalus` | Authenticated Kubernetes operations tools |
-| `unifi-mcp` | `helm/unifi-network-mcp-server/` | `daedalus` | Authenticated, read-only UniFi tools |
+| `unifi-mcp` | `helm/unifi-network-mcp-server/` | `daedalus` | Authenticated UniFi read and mutation tools |
 
 ```text
 hindsight   (independent durable-memory service)

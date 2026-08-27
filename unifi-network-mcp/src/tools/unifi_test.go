@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/tuttlebr/unifi-network-mcp/pkg/unifi"
@@ -113,6 +114,84 @@ func TestFirewallPolicyOrderingToolRequiresZonePair(t *testing.T) {
 			t.Fatalf("%s must be required", name)
 		}
 	}
+}
+
+func TestMutationToolAnnotationsAndRequestSchema(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("createNetwork")
+	if !ok {
+		t.Fatal("createNetwork endpoint missing")
+	}
+	tool := EndpointTool(endpoint, ToolDefaults{})
+	if tool.Annotations.ReadOnlyHint == nil || *tool.Annotations.ReadOnlyHint {
+		t.Fatal("createNetwork must not be marked read-only")
+	}
+	if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+		t.Fatal("createNetwork should be non-destructive because it creates rather than replaces state")
+	}
+	if tool.Annotations.IdempotentHint == nil || *tool.Annotations.IdempotentHint {
+		t.Fatal("createNetwork POST must not be marked idempotent")
+	}
+	if _, ok := tool.InputSchema.Properties["body"]; !ok {
+		t.Fatal("request body schema missing")
+	}
+	if !requiredContains(tool.InputSchema.Required, "body") {
+		t.Fatal("request body must be required")
+	}
+	if len(tool.InputSchema.Defs) == 0 {
+		t.Fatal("request body definitions missing")
+	}
+	body, ok := tool.InputSchema.Properties["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected body schema: %#v", tool.InputSchema.Properties["body"])
+	}
+	if _, ok := body["oneOf"]; !ok {
+		t.Fatalf("discriminated network body schema has no oneOf: %#v", body)
+	}
+	if _, err := json.Marshal(tool); err != nil {
+		t.Fatalf("marshal mutation tool: %v", err)
+	}
+}
+
+func TestDestructiveToolAnnotationsAndTypedParameters(t *testing.T) {
+	deleteNetwork, ok := unifi.EndpointByName("deleteNetwork")
+	if !ok {
+		t.Fatal("deleteNetwork endpoint missing")
+	}
+	tool := EndpointTool(deleteNetwork, ToolDefaults{})
+	if tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
+		t.Fatal("deleteNetwork must be marked destructive")
+	}
+	if tool.Annotations.IdempotentHint == nil || !*tool.Annotations.IdempotentHint {
+		t.Fatal("deleteNetwork must be marked idempotent")
+	}
+	force, ok := tool.InputSchema.Properties["force"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected force schema: %#v", tool.InputSchema.Properties["force"])
+	}
+	if force["type"] != "boolean" || force["default"] != false {
+		t.Fatalf("force schema = %#v", force)
+	}
+
+	portAction, ok := unifi.EndpointByName("executePortAction")
+	if !ok {
+		t.Fatal("executePortAction endpoint missing")
+	}
+	tool = EndpointTool(portAction, ToolDefaults{})
+	portIdx, ok := tool.InputSchema.Properties["portIdx"].(map[string]any)
+	if !ok || portIdx["type"] != "integer" {
+		t.Fatalf("portIdx schema = %#v, want integer", portIdx)
+	}
+}
+
+func TestEndpointToolSchemasStayBounded(t *testing.T) {
+	data, err := json.Marshal(EndpointTools())
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	if len(data) > 512*1024 {
+		t.Fatalf("serialized tool registry = %d bytes, want <= 524288", len(data))
+	}
+	t.Logf("serialized tool registry: %d bytes", len(data))
 }
 
 func requiredContains(required []string, name string) bool {

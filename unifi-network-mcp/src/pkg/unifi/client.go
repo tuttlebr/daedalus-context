@@ -1,6 +1,7 @@
 package unifi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -14,8 +15,9 @@ import (
 
 const (
 	maxReadBytes      = 4 * 1024 * 1024
+	maxRequestBytes   = 1 * 1024 * 1024
 	maxErrorBodyBytes = 16 * 1024
-	userAgent         = "unifi-network-mcp/0.1.0"
+	userAgent         = "unifi-network-mcp/0.2.0"
 	defaultTimeout    = 30 * time.Second
 )
 
@@ -77,38 +79,72 @@ func NewClient(cfg Config) (*Client, error) {
 
 // GetJSON performs an authenticated GET and returns sanitized, bounded JSON.
 func (c *Client) GetJSON(ctx context.Context, path string, query url.Values) ([]byte, error) {
+	return c.DoJSON(ctx, http.MethodGet, path, query, nil)
+}
+
+// DoJSON performs an authenticated UniFi API operation and returns sanitized,
+// bounded JSON. Empty successful responses are normalized to a small JSON
+// status object so every MCP tool result remains machine-readable.
+func (c *Client) DoJSON(ctx context.Context, method, path string, query url.Values, requestBody any) ([]byte, error) {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return nil, fmt.Errorf("unsupported unifi api method %q", method)
+	}
+
 	target, err := c.buildURL(path, query)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	var encodedRequest []byte
+	if requestBody != nil {
+		encodedRequest, err = json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed serializing unifi api request for %s: %w", path, err)
+		}
+		if len(encodedRequest) > maxRequestBytes {
+			return nil, fmt.Errorf("unifi api request for %s exceeds %d bytes", path, maxRequestBytes)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(encodedRequest))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-API-KEY", c.apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	if requestBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("unifi api GET %s failed: %w", path, err)
+		return nil, fmt.Errorf("unifi api %s %s failed: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return nil, fmt.Errorf("unifi api GET %s returned %s: %s", path, resp.Status, SanitizeText(string(body)))
+		return nil, fmt.Errorf("unifi api %s %s returned %s: %s", method, path, resp.Status, SanitizeText(string(body)))
 	}
 
 	body, err := readBounded(resp.Body, maxReadBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading unifi api response for %s: %w", path, err)
 	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return json.Marshal(map[string]any{
+			"status":     "success",
+			"statusCode": resp.StatusCode,
+		})
+	}
 
 	var decoded interface{}
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, fmt.Errorf("unifi api GET %s returned invalid JSON: %w", path, err)
+		return nil, fmt.Errorf("unifi api %s %s returned invalid JSON: %w", method, path, err)
 	}
 
 	data, err := json.Marshal(SanitizeForOutput(decoded))

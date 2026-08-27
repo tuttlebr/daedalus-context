@@ -1,18 +1,25 @@
-# UniFi Network Read-Only MCP Server
+# UniFi Network MCP Server
 
-Read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for the local UniFi Network integration API on a UDM/UniFi console. It exposes every documented `GET` operation from the [UniFi Network 10.4.57 OpenAPI contract](https://developer.ui.com/network/v10.4.57/openapi.json) and authenticates to UniFi with `X-API-KEY`.
+[Model Context Protocol](https://modelcontextprotocol.io/) server for the local UniFi Network integration API on a UDM/UniFi console. It exposes the complete 73-operation surface documented by the supplied [UniFi Network 10.5.67 API capture](./UniFi-Network-API.md) and authenticates to UniFi with `X-API-KEY`. Typed request schemas come from the checksum-pinned [UniFi Network 10.4.57 OpenAPI contract](https://developer.ui.com/network/v10.4.57/openapi.json), whose method, path, and operation ID set matches the 10.5.67 capture.
 
 By default the server starts without a UniFi device URL, API key, or device credentials. MCP clients can provide `baseUrl` and `apiKey` on each tool call, or private deployments can configure server-side defaults with environment variables.
 
 ## Features
 
-- 41 read-only UniFi Network tools for sites, devices, clients, networks, Wi-Fi, hotspot vouchers, firewall, ACL, switching, DNS, WAN, VPN, RADIUS, DPI, and countries.
+- 73 UniFi Network tools: 41 `GET`, 12 `POST`, 9 `PUT`, 1 `PATCH`, and 10 `DELETE` operations for sites, devices, clients, networks, Wi-Fi, hotspot vouchers, firewall, ACL, switching, DNS, WAN, VPN, RADIUS, DPI, and countries.
+- Mutation tools include typed JSON request bodies, discriminator variants, typed path/query parameters, and MCP read-only, destructive, and idempotent annotations.
 - `stdio`, `sse`, and `streamable-http` transports using the same Go MCP stack as the reference Kubernetes MCP server.
 - Optional HTTP bearer-token auth for MCP clients.
 - `/livez` and `/readyz` are local-only health; `/dependencyz` performs one
   bounded controller call. `/healthz` remains a local compatibility alias.
 - TLS verification is enabled by default. Clients can set `insecureSkipVerify=true` per tool call, or trusted deployments can configure `UNIFI_INSECURE_SKIP_VERIFY=true`.
 - Sanitizes secret-like keys and rejects oversized tool responses with a compact JSON error.
+
+## Mutation Safety
+
+Authenticated MCP callers can create, update, act on, or delete controller-managed objects. MCP annotations tell compatible clients which tools are read-only or destructive, but those annotations are advisory and are not an additional authorization boundary. Restrict `MCP_AUTH_TOKEN`, use `UNIFI_FIXED_CONTROLLER=true` in production, review mutation arguments before approval, and grant the configured UniFi API key only the privileges its callers need.
+
+Validation and health checks use `GET /v1/info`; the test suite uses local test servers and does not send mutation traffic to a UniFi controller.
 
 ## Validate UniFi API Access
 
@@ -62,6 +69,18 @@ Example tool-call arguments for `listSites`:
 }
 ```
 
+Mutation tools accept a `body` object when the API operation defines a request body. For example, `patchFirewallPolicy` changes controller state and accepts:
+
+```json
+{
+  "siteId": "SITE_UUID",
+  "firewallPolicyId": "POLICY_UUID",
+  "body": {
+    "loggingEnabled": true
+  }
+}
+```
+
 ## Configuration
 
 | Flag | Environment Variable | Default | Description |
@@ -84,6 +103,8 @@ Every UniFi tool accepts these connection arguments. `baseUrl` and `apiKey` are 
 | `apiKey` | yes | UniFi integration API key sent as `X-API-KEY` |
 | `insecureSkipVerify` | no | Set `true` only for self-signed local console certificates |
 | `timeoutSeconds` | no | Per-call outbound timeout, default `30`, max `120` |
+
+Endpoint-specific path/query arguments and mutation `body` schemas are included directly in each MCP tool definition.
 
 ## Image Release
 
@@ -127,6 +148,7 @@ make test
 make build
 ```
 
-The tests compare the hardcoded MCP registry and its parameters with
-`network_v10.4.57_openapi.json`, including all 41 GET paths and the absence of
-write operations.
+The tests compare all 73 MCP operations and parameters with
+`network_v10.4.57_openapi.json`, verify the embedded contract byte-for-byte,
+exercise mutation request/response handling against local TLS servers, and
+ensure the complete serialized tool registry remains bounded.

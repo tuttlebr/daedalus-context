@@ -52,15 +52,20 @@ func main() {
 	}
 
 	s := server.NewMCPServer(
-		"UniFi Network Read-Only MCP Server",
-		"0.1.0",
+		"UniFi Network MCP Server",
+		"0.2.0",
 		server.WithResourceCapabilities(true, true),
 	)
 
-	for _, endpoint := range unifi.Endpoints() {
-		addAuditedTool(s, tools.EndpointTool(endpoint, toolDefaults), "read", handlers.EndpointHandler(endpoint, clientDefaults))
+	endpoints := unifi.Endpoints()
+	readOnlyCount := 0
+	for _, endpoint := range endpoints {
+		if endpoint.IsReadOnly() {
+			readOnlyCount++
+		}
+		addAuditedTool(s, tools.EndpointTool(endpoint, toolDefaults), strings.ToLower(endpoint.Method), handlers.EndpointHandler(endpoint, clientDefaults))
 	}
-	log.Printf("Registered %d read-only UniFi tools", len(unifi.Endpoints()))
+	log.Printf("Registered %d UniFi tools (%d read-only, %d mutation)", len(endpoints), readOnlyCount, len(endpoints)-readOnlyCount)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

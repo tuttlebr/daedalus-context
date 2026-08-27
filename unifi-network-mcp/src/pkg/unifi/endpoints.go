@@ -1,26 +1,53 @@
 package unifi
 
-// Endpoint describes a read-only UniFi Network integration API operation
-// exposed as an MCP tool.
+import "strings"
+
+// Endpoint describes a UniFi Network integration API operation exposed as an
+// MCP tool.
 type Endpoint struct {
 	Name               string
 	Description        string
 	Method             string
 	Path               string
 	PathParams         []string
+	PathParamSchemas   map[string]ParameterSchema
 	SupportsPagination bool
 	SupportsFilter     bool
 	PaginationDefault  int
 	PaginationMaximum  int
 	QueryParams        []QueryParameter
+	RequestBody        *RequestBody
+	Destructive        bool
 }
 
-// QueryParameter describes an additional documented string query parameter.
+// ParameterSchema describes the JSON Schema subset used by documented path
+// and query parameters.
+type ParameterSchema struct {
+	Type        string
+	Format      string
+	Description string
+	Default     any
+	Minimum     *float64
+	Maximum     *float64
+}
+
+// QueryParameter describes an additional documented query parameter.
 // Pagination and filter parameters use the dedicated Endpoint fields above.
 type QueryParameter struct {
 	Name        string
 	Description string
 	Required    bool
+	Schema      ParameterSchema
+}
+
+// RequestBody is the self-contained JSON Schema for a documented request
+// body. Definitions are attached at the MCP input-schema root so local $refs
+// resolve without shipping unrelated OpenAPI components.
+type RequestBody struct {
+	Required    bool
+	Description string
+	Schema      map[string]any
+	Definitions map[string]any
 }
 
 const (
@@ -44,8 +71,42 @@ func (e Endpoint) PaginationMaximumLimit() int {
 	return maximumPaginationLimit
 }
 
-// Endpoints returns the complete hardcoded read-only MCP surface. Every entry
-// maps to a documented GET endpoint from the UniFi Network 10.4.57 API capture.
+// IsReadOnly reports whether the operation is safe to expose as read-only MCP
+// functionality.
+func (e Endpoint) IsReadOnly() bool {
+	return strings.EqualFold(e.Method, methodGET)
+}
+
+// IsIdempotent reports the HTTP method's documented retry semantics. POST and
+// PATCH are treated conservatively; GET, PUT, and DELETE are idempotent.
+func (e Endpoint) IsIdempotent() bool {
+	switch strings.ToUpper(e.Method) {
+	case methodGET, methodPUT, methodDELETE:
+		return true
+	default:
+		return false
+	}
+}
+
+// PathParameterSchema returns the documented schema for a path parameter.
+// Existing read-only endpoints use string identifiers unless overridden.
+func (e Endpoint) PathParameterSchema(name string) ParameterSchema {
+	if schema, ok := e.PathParamSchemas[name]; ok {
+		return schema.withDefaults()
+	}
+	return ParameterSchema{Type: "string"}
+}
+
+func (s ParameterSchema) withDefaults() ParameterSchema {
+	if strings.TrimSpace(s.Type) == "" {
+		s.Type = "string"
+	}
+	return s
+}
+
+// Endpoints returns the complete MCP surface. The stable read-only aliases are
+// curated below, while mutation operations and their request schemas are
+// loaded from the embedded, checksum-pinned OpenAPI contract.
 func Endpoints() []Endpoint {
 	out := make([]Endpoint, len(endpoints))
 	copy(out, endpoints)
@@ -62,9 +123,15 @@ func EndpointByName(name string) (Endpoint, bool) {
 	return Endpoint{}, false
 }
 
-const methodGET = "GET"
+const (
+	methodGET    = "GET"
+	methodPOST   = "POST"
+	methodPUT    = "PUT"
+	methodPATCH  = "PATCH"
+	methodDELETE = "DELETE"
+)
 
-var endpoints = []Endpoint{
+var readOnlyEndpoints = []Endpoint{
 	{
 		Name:        "getInfo",
 		Description: "Retrieve general information about the UniFi Network application.",
@@ -406,3 +473,5 @@ var endpoints = []Endpoint{
 		SupportsFilter:     true,
 	},
 }
+
+var endpoints = mustBuildEndpoints(readOnlyEndpoints)

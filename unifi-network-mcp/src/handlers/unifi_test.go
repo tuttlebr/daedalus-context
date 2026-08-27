@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -205,5 +206,130 @@ func TestBuildQueryRequiresFirewallPolicyOrderingZonePair(t *testing.T) {
 	delete(args, "destinationFirewallZoneId")
 	if _, err := buildQuery(endpoint, args); err == nil {
 		t.Fatal("expected missing destination firewall zone to fail")
+	}
+}
+
+func TestEndpointHandlerSendsMutationMethodQueryAndBody(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/v1/sites/site-1/networks/network-1" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["name"] != "Updated network" {
+			t.Fatalf("body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"network-1","name":"Updated network"}`))
+	}))
+	defer server.Close()
+
+	endpoint, ok := unifi.EndpointByName("updateNetwork")
+	if !ok {
+		t.Fatal("updateNetwork endpoint missing")
+	}
+	insecureSkipVerify := true
+	handler := EndpointHandler(endpoint, ClientDefaults{
+		BaseURL:            server.URL,
+		APIKey:             "test-key",
+		InsecureSkipVerify: &insecureSkipVerify,
+	})
+	result, err := handler(context.Background(), mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Arguments: map[string]interface{}{
+			"siteId":    "site-1",
+			"networkId": "network-1",
+			"body": map[string]interface{}{
+				"name": "Updated network",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handler failed: %v", err)
+	}
+	if result == nil || !strings.Contains(result.Content[0].(mcp.TextContent).Text, `"id":"network-1"`) {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestBuildPathUsesIntegerPathParameter(t *testing.T) {
+	endpoint, ok := unifi.EndpointByName("executePortAction")
+	if !ok {
+		t.Fatal("executePortAction endpoint missing")
+	}
+	path, err := buildPath(endpoint, map[string]interface{}{
+		"siteId":   "site-1",
+		"deviceId": "device-1",
+		"portIdx":  float64(7),
+	})
+	if err != nil {
+		t.Fatalf("buildPath failed: %v", err)
+	}
+	if path != "/v1/sites/site-1/devices/device-1/interfaces/ports/7/actions" {
+		t.Fatalf("path = %q", path)
+	}
+	if _, err := buildPath(endpoint, map[string]interface{}{
+		"siteId":   "site-1",
+		"deviceId": "device-1",
+		"portIdx":  "seven",
+	}); err == nil {
+		t.Fatal("expected non-integer portIdx error")
+	}
+}
+
+func TestBuildQuerySupportsBooleanAndRequiredMutationParameters(t *testing.T) {
+	deleteNetwork, ok := unifi.EndpointByName("deleteNetwork")
+	if !ok {
+		t.Fatal("deleteNetwork endpoint missing")
+	}
+	query, err := buildQuery(deleteNetwork, map[string]interface{}{"force": true})
+	if err != nil {
+		t.Fatalf("buildQuery failed: %v", err)
+	}
+	if query.Get("force") != "true" {
+		t.Fatalf("force = %q, want true", query.Get("force"))
+	}
+
+	deleteVouchers, ok := unifi.EndpointByName("deleteVouchers")
+	if !ok {
+		t.Fatal("deleteVouchers endpoint missing")
+	}
+	if _, err := buildQuery(deleteVouchers, map[string]interface{}{}); err == nil {
+		t.Fatal("expected required filter error")
+	}
+	query, err = buildQuery(deleteVouchers, map[string]interface{}{"filter": "expired.eq(true)"})
+	if err != nil {
+		t.Fatalf("buildQuery failed: %v", err)
+	}
+	if query.Get("filter") != "expired.eq(true)" {
+		t.Fatalf("filter = %q", query.Get("filter"))
+	}
+}
+
+func TestBuildRequestBodyEnforcesOperationContract(t *testing.T) {
+	createNetwork, ok := unifi.EndpointByName("createNetwork")
+	if !ok {
+		t.Fatal("createNetwork endpoint missing")
+	}
+	if _, err := buildRequestBody(createNetwork, map[string]interface{}{}); err == nil {
+		t.Fatal("expected missing body error")
+	}
+	if _, err := buildRequestBody(createNetwork, map[string]interface{}{"body": "not-an-object"}); err == nil {
+		t.Fatal("expected non-object body error")
+	}
+	if _, err := buildRequestBody(createNetwork, map[string]interface{}{"body": map[string]interface{}{}}); err != nil {
+		t.Fatalf("valid object body rejected: %v", err)
+	}
+
+	listSites, ok := unifi.EndpointByName("listSites")
+	if !ok {
+		t.Fatal("listSites endpoint missing")
+	}
+	if _, err := buildRequestBody(listSites, map[string]interface{}{"body": map[string]interface{}{}}); err == nil {
+		t.Fatal("expected body rejection for GET endpoint")
 	}
 }

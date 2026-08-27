@@ -22,8 +22,7 @@ type ClientDefaults struct {
 	Locked             bool
 }
 
-// EndpointHandler creates an MCP handler for a hardcoded read-only UniFi GET
-// endpoint.
+// EndpointHandler creates an MCP handler for a registered UniFi API endpoint.
 func EndpointHandler(endpoint unifi.Endpoint, defaults ClientDefaults) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, ok := request.Params.Arguments.(map[string]interface{})
@@ -46,7 +45,12 @@ func EndpointHandler(endpoint unifi.Endpoint, defaults ClientDefaults) func(ctx 
 			return nil, err
 		}
 
-		data, err := client.GetJSON(ctx, path, query)
+		body, err := buildRequestBody(endpoint, args)
+		if err != nil {
+			return nil, err
+		}
+
+		data, err := client.DoJSON(ctx, endpoint.Method, path, query, body)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +106,7 @@ func clientFromArgs(args map[string]interface{}, defaults ClientDefaults) (*unif
 func buildPath(endpoint unifi.Endpoint, args map[string]interface{}) (string, error) {
 	path := endpoint.Path
 	for _, param := range endpoint.PathParams {
-		value, err := getRequiredStringArg(args, param)
+		value, _, err := getParameterTextArg(args, param, endpoint.PathParameterSchema(param), true)
 		if err != nil {
 			return "", err
 		}
@@ -149,23 +153,98 @@ func buildQuery(endpoint unifi.Endpoint, args map[string]interface{}) (url.Value
 	}
 
 	for _, param := range endpoint.QueryParams {
-		var value string
-		if param.Required {
-			var err error
-			value, err = getRequiredStringArg(args, param.Name)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			value = strings.TrimSpace(getStringArg(args, param.Name, ""))
-			if value == "" {
-				continue
-			}
+		schema := param.Schema
+		if strings.TrimSpace(schema.Type) == "" {
+			schema.Type = "string"
+		}
+		value, supplied, err := getParameterTextArg(args, param.Name, schema, param.Required)
+		if err != nil {
+			return nil, err
+		}
+		if !supplied {
+			continue
 		}
 		query.Set(param.Name, value)
 	}
 
 	return query, nil
+}
+
+func buildRequestBody(endpoint unifi.Endpoint, args map[string]interface{}) (any, error) {
+	value, supplied := args["body"]
+	if endpoint.RequestBody == nil {
+		if supplied {
+			return nil, fmt.Errorf("body is not accepted for %s %s", endpoint.Method, endpoint.Path)
+		}
+		return nil, nil
+	}
+	if !supplied || value == nil {
+		if endpoint.RequestBody.Required {
+			return nil, fmt.Errorf("missing required parameter: body")
+		}
+		return nil, nil
+	}
+	if _, ok := value.(map[string]interface{}); !ok {
+		return nil, fmt.Errorf("body must be a JSON object")
+	}
+	return value, nil
+}
+
+func getParameterTextArg(args map[string]interface{}, key string, schema unifi.ParameterSchema, required bool) (string, bool, error) {
+	switch strings.ToLower(strings.TrimSpace(schema.Type)) {
+	case "", "string":
+		value, supplied := args[key]
+		if !supplied || value == nil {
+			if required {
+				return "", false, fmt.Errorf("missing required parameter: %s", key)
+			}
+			return "", false, nil
+		}
+		text, ok := value.(string)
+		if !ok {
+			return "", true, fmt.Errorf("%s must be a string", key)
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			if required {
+				return "", true, fmt.Errorf("missing required parameter: %s", key)
+			}
+			return "", false, nil
+		}
+		return text, true, nil
+	case "integer":
+		value, supplied, err := getOptionalIntArg(args, key)
+		if err != nil {
+			return "", supplied, err
+		}
+		if !supplied {
+			if required {
+				return "", false, fmt.Errorf("missing required parameter: %s", key)
+			}
+			return "", false, nil
+		}
+		if schema.Minimum != nil && float64(value) < *schema.Minimum {
+			return "", true, fmt.Errorf("%s must be >= %v", key, *schema.Minimum)
+		}
+		if schema.Maximum != nil && float64(value) > *schema.Maximum {
+			return "", true, fmt.Errorf("%s must be <= %v", key, *schema.Maximum)
+		}
+		return strconv.Itoa(value), true, nil
+	case "boolean":
+		value, supplied, err := getOptionalBoolArg(args, key)
+		if err != nil {
+			return "", supplied, err
+		}
+		if !supplied {
+			if required {
+				return "", false, fmt.Errorf("missing required parameter: %s", key)
+			}
+			return "", false, nil
+		}
+		return strconv.FormatBool(value), true, nil
+	default:
+		return "", false, fmt.Errorf("unsupported parameter type %q for %s", schema.Type, key)
+	}
 }
 
 func getStringArg(args map[string]interface{}, key string, defaultValue string) string {
@@ -174,14 +253,6 @@ func getStringArg(args map[string]interface{}, key string, defaultValue string) 
 		return defaultValue
 	}
 	return val
-}
-
-func getRequiredStringArg(args map[string]interface{}, key string) (string, error) {
-	val, ok := args[key].(string)
-	if !ok || strings.TrimSpace(val) == "" {
-		return "", fmt.Errorf("missing required parameter: %s", key)
-	}
-	return val, nil
 }
 
 func getOptionalBoolArg(args map[string]interface{}, key string) (bool, bool, error) {
