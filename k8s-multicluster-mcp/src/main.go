@@ -96,6 +96,9 @@ func addAuditedTool(s *server.MCPServer, tool mcp.Tool, capability string, handl
 	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
 		result, err := handler(ctx, request)
+		if err == nil {
+			boundToolResult(result)
+		}
 		status := "ok"
 		if err != nil {
 			status = "error"
@@ -111,6 +114,24 @@ func addAuditedTool(s *server.MCPServer, tool mcp.Tool, capability string, handl
 		}
 		return result, err
 	})
+}
+
+// boundToolResult is the final response boundary for every registered tool.
+// Individual handlers preserve structured JSON where possible; this guard also
+// bounds plain-text and future tool responses that bypass marshalSafe.
+func boundToolResult(result *mcp.CallToolResult) {
+	if result == nil {
+		return
+	}
+	for i, content := range result.Content {
+		switch typed := content.(type) {
+		case mcp.TextContent:
+			typed.Text = k8s.SanitizeText(typed.Text)
+			result.Content[i] = typed
+		case *mcp.TextContent:
+			typed.Text = k8s.SanitizeText(typed.Text)
+		}
+	}
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code

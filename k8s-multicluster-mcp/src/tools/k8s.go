@@ -12,6 +12,7 @@ func GetAPIResourcesTool() mcp.Tool {
 		"getAPIResources",
 		mcp.WithDescription("Discover all available API resource types (kinds) in the Kubernetes cluster. "+
 			"Returns resource names, short names, API group, whether they are namespaced, and supported verbs. "+
+			"Results are sorted, filterable, and bounded by default to keep discovery responses compact. "+
 			"Use this tool first when you need to know what resource types exist or what the correct resource name is. "+
 			"Prefer getNamespaceResources if you want to list actual resource instances inside a namespace."),
 		mcp.WithBoolean("includeNamespaceScoped",
@@ -20,6 +21,12 @@ func GetAPIResourcesTool() mcp.Tool {
 		mcp.WithBoolean("includeClusterScoped",
 			mcp.Description("Include cluster-scoped resource types (e.g. nodes, namespaces, clusterroles) in the results. Default: true."),
 			mcp.DefaultBool(true)),
+		mcp.WithString("query",
+			mcp.Description("Case-insensitive substring matched against resource name, kind, API group, and version. Omit to match all types.")),
+		mcp.WithNumber("limit",
+			mcp.Description("Maximum number of matching API resource types to return. Default: 100. Max: 500."),
+			mcp.DefaultNumber(k8s.DefaultAPIResourceLimit),
+			mcp.Min(1), mcp.Max(k8s.MaxAPIResourceLimit), mcp.MultipleOf(1)),
 	)
 }
 
@@ -27,9 +34,10 @@ func GetAPIResourcesTool() mcp.Tool {
 func ListResourcesTool() mcp.Tool {
 	return mcp.NewTool(
 		"listResources",
-		mcp.WithDescription("List Kubernetes resources of a specific type. Returns resource names, namespaces, and status. "+
+		mcp.WithDescription("List Kubernetes resources of a specific type. Returns compact resource names, namespaces, and common status fields by default. "+
 			"Use lowercase plural resource names (e.g. \"deployments\" not \"Deployment\"). "+
 			"Omit namespace to search across all namespaces. "+
+			"Use getResource for the full representation of one result. "+
 			"For listing all resource types within a single namespace, use getNamespaceResources instead."),
 		mcp.WithString("kind", mcp.Required(),
 			mcp.Description("Resource type in lowercase plural form. "+
@@ -49,6 +57,13 @@ func ListResourcesTool() mcp.Tool {
 			mcp.Description("Kubernetes field selector to filter resources by field values. "+
 				"Examples: \"status.phase=Running\", \"metadata.name=my-pod\", \"spec.nodeName=node1\". "+
 				"Not all fields are supported for all resource types. Omit to skip field filtering.")),
+		mcp.WithBoolean("includeDetails",
+			mcp.Description("Return complete resource objects instead of compact summaries. Default: false. Prefer getResource when only one object is needed."),
+			mcp.DefaultBool(false)),
+		mcp.WithNumber("limit",
+			mcp.Description("Maximum number of matching resources to return. Default: 50. Max: 200."),
+			mcp.DefaultNumber(k8s.DefaultResourceListLimit),
+			mcp.Min(1), mcp.Max(k8s.MaxResourceListLimit), mcp.MultipleOf(1)),
 	)
 }
 
@@ -161,6 +176,10 @@ func GetEventsTool() mcp.Tool {
 		mcp.WithString("labelSelector",
 			mcp.Description("Label selector to filter events. "+
 				"Examples: \"app=nginx\", \"involvedObject.kind=Pod\". Omit to return all events.")),
+		mcp.WithNumber("limit",
+			mcp.Description("Maximum number of events to return, newest first. Default: 50. Max: 200."),
+			mcp.DefaultNumber(k8s.DefaultEventLimit),
+			mcp.Min(1), mcp.Max(k8s.MaxEventLimit), mcp.MultipleOf(1)),
 	)
 }
 
@@ -669,8 +688,8 @@ func GetClusterSummaryTool() mcp.Tool {
 			"getPodDebugInfo, or getNamespaceResources."),
 		mcp.WithBoolean("includeNamespaceDetails",
 			mcp.Description("Include per-namespace workload breakdown (deployments, statefulsets, daemonsets, jobs with health status). "+
-				"Set to false for a faster, lighter summary that only lists namespace names. Default: true."),
-			mcp.DefaultBool(true)),
+				"Set to true only when the per-namespace breakdown is needed. Default: false."),
+			mcp.DefaultBool(false)),
 	)
 }
 

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestGetEnvBoolDefault(t *testing.T) {
@@ -22,6 +26,29 @@ func TestGetEnvBoolDefault(t *testing.T) {
 	}
 	if !getEnvBoolDefault("BOOL_INVALID", true) {
 		t.Fatal("expected invalid env to use default")
+	}
+}
+
+func TestBoundToolResultCapsPlainText(t *testing.T) {
+	result := mcp.NewToolResultText(strings.Repeat("verbose output\n", 10000))
+	boundToolResult(result)
+
+	content, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type %T", result.Content[0])
+	}
+	if len(content.Text) > 64*1024 {
+		t.Fatalf("bounded response has %d bytes", len(content.Text))
+	}
+	if !strings.Contains(content.Text, "OUTPUT TRUNCATED") {
+		t.Fatal("bounded response is missing truncation metadata")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 128*1024 {
+		t.Fatalf("MCP result envelope has %d bytes, want less than 128KiB", len(encoded))
 	}
 }
 

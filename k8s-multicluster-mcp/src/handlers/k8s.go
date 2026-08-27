@@ -3,7 +3,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -13,25 +12,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
-
-// marshalSafe serializes a value to JSON and applies size truncation to
-// prevent oversized responses from being sent to the LLM.
-func marshalSafe(v interface{}) ([]byte, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-
-	var decoded interface{}
-	if err := json.Unmarshal(data, &decoded); err == nil {
-		data, err = json.Marshal(k8s.SanitizeForOutput(decoded))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return k8s.TruncateJSON(data), nil
-}
 
 // Helper functions for consistent parameter extraction
 func getStringArg(args map[string]interface{}, key string, defaultValue string) string {
@@ -123,9 +103,8 @@ func getStringArrayArg(args map[string]interface{}, key string) []string {
 }
 
 // GetAPIResources returns a handler function for the getAPIResources tool.
-// It retrieves API resources from the Kubernetes cluster based on the provided
-// context and parameters (includeNamespaceScoped, includeClusterScoped).
-// The result is serialized to JSON and returned.
+// It retrieves API resources from the Kubernetes cluster, filters and bounds
+// the discovery result, then returns compact JSON with count metadata.
 func GetAPIResources(client *k8s.Client) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
@@ -136,6 +115,11 @@ func GetAPIResources(client *k8s.Client) func(ctx context.Context, request mcp.C
 
 		includeNamespaceScoped := getBoolArg(args, "includeNamespaceScoped", true)
 		includeClusterScoped := getBoolArg(args, "includeClusterScoped", true)
+		query := getStringArg(args, "query", "")
+		limit, err := getBoundedIntArg(args, "limit", k8s.DefaultAPIResourceLimit, 1, k8s.MaxAPIResourceLimit)
+		if err != nil {
+			return nil, err
+		}
 
 		// Fetch API resources
 		resources, err := client.GetAPIResources(ctx, includeNamespaceScoped, includeClusterScoped)
@@ -144,7 +128,7 @@ func GetAPIResources(client *k8s.Client) func(ctx context.Context, request mcp.C
 		}
 
 		// Serialize response to JSON
-		jsonResponse, err := marshalSafe(resources)
+		jsonResponse, err := marshalSafe(apiResourceResponse(resources, query, limit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize response: %w", err)
 		}
@@ -156,7 +140,8 @@ func GetAPIResources(client *k8s.Client) func(ctx context.Context, request mcp.C
 
 // ListResources returns a handler function for the listResources tool.
 // It lists resources in the Kubernetes cluster based on the provided kind,
-// namespace, and labelSelector. The result is serialized to JSON and returned.
+// namespace, and selectors. Compact summaries are returned by default; callers
+// can request a bounded number of full resource objects.
 func ListResources(client *k8s.Client) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments - using capital K to match your tools definition
@@ -173,6 +158,11 @@ func ListResources(client *k8s.Client) func(ctx context.Context, request mcp.Cal
 		namespace := getStringArg(args, "namespace", "")
 		labelSelector := getStringArg(args, "labelSelector", "")
 		fieldSelector := getStringArg(args, "fieldSelector", "")
+		includeDetails := getBoolArg(args, "includeDetails", false)
+		limit, err := getBoundedIntArg(args, "limit", k8s.DefaultResourceListLimit, 1, k8s.MaxResourceListLimit)
+		if err != nil {
+			return nil, err
+		}
 
 		// Fetch resources
 		resources, err := client.ListResources(ctx, kind, namespace, labelSelector, fieldSelector)
@@ -181,7 +171,7 @@ func ListResources(client *k8s.Client) func(ctx context.Context, request mcp.Cal
 		}
 
 		// Serialize response to JSON
-		jsonResponse, err := marshalSafe(resources)
+		jsonResponse, err := marshalSafe(resourceListResponse(resources, includeDetails, limit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize response: %w", err)
 		}
@@ -375,7 +365,7 @@ func GetPodMetrics(client *k8s.Client) func(ctx context.Context, request mcp.Cal
 
 // GetEvents returns a handler function for the getEvents tool.
 // It retrieves events from the Kubernetes cluster based on the provided
-// namespace and labelSelector. The result is serialized to JSON and returned.
+// namespace and labelSelector, returning a bounded newest-first result.
 func GetEvents(client *k8s.Client) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, ok := request.Params.Arguments.(map[string]interface{})
@@ -385,13 +375,17 @@ func GetEvents(client *k8s.Client) func(ctx context.Context, request mcp.CallToo
 
 		namespace := getStringArg(args, "namespace", "")
 		labelSelector := getStringArg(args, "labelSelector", "")
+		limit, err := getBoundedIntArg(args, "limit", k8s.DefaultEventLimit, 1, k8s.MaxEventLimit)
+		if err != nil {
+			return nil, err
+		}
 
 		events, err := client.GetEvents(ctx, namespace, labelSelector)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get events: %w", err)
 		}
 
-		jsonResponse, err := marshalSafe(events)
+		jsonResponse, err := marshalSafe(eventListResponse(events, limit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize events response: %w", err)
 		}
@@ -1338,7 +1332,7 @@ func GetClusterSummary(client *k8s.Client) func(ctx context.Context, request mcp
 			args = map[string]interface{}{}
 		}
 
-		includeNamespaceDetails := getBoolArg(args, "includeNamespaceDetails", true)
+		includeNamespaceDetails := getBoolArg(args, "includeNamespaceDetails", false)
 
 		summary, err := client.GetClusterSummary(ctx, includeNamespaceDetails)
 		if err != nil {

@@ -3,13 +3,13 @@ functions:
 
   k8s_mcp_get_api_resources:
     _type: mcp_tool_wrapper
-    description: Lists the available API resources in the Kubernetes cluster, similar to `kubectl api-resources`. Use this to discover what resources are available in the cluster.
+    description: Searches the available API resource types in the Kubernetes cluster, similar to `kubectl api-resources`. Results are bounded; use query and limit to narrow discovery.
     mcp_tool_name: getAPIResources
     url: ${KUBERNETES_MCP_SERVER}
 
   k8s_mcp_list_resources:
     _type: mcp_tool_wrapper
-    description: Lists all instances of a specific resource type (e.g., pods, services, deployments) in the Kubernetes cluster. Supports namespace, label selector, and field selector filtering.
+    description: Lists compact summaries of a specific resource type (e.g., pods, services, deployments). Supports namespace, label selector, field selector, and bounded detail controls; use getResource for one full object.
     mcp_tool_name: listResources
     url: ${KUBERNETES_MCP_SERVER}
 
@@ -45,7 +45,7 @@ functions:
 
   k8s_mcp_get_events:
     _type: mcp_tool_wrapper
-    description: Retrieves events for a specific namespace or across all namespaces, similar to `kubectl get events`. Useful for troubleshooting.
+    description: Retrieves a bounded newest-first event list for a specific namespace or across all namespaces. Use namespace, label selector, and limit to narrow troubleshooting output.
     mcp_tool_name: getEvents
     url: ${KUBERNETES_MCP_SERVER}
 
@@ -91,7 +91,7 @@ functions:
 
   k8s_mcp_get_cluster_summary:
     _type: mcp_tool_wrapper
-    description: Gets a concise high-level cluster status overview including active context, version, node health, namespace listing, workload health, pod phase counts, and recent warning events.
+    description: Gets a concise high-level cluster status overview including active context, version, node health, namespace listing, pod phase counts, and recent warning events. Per-namespace workload detail is opt-in.
     mcp_tool_name: getClusterSummary
     url: ${KUBERNETES_MCP_SERVER}
 

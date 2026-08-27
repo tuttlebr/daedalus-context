@@ -2,16 +2,33 @@ package k8s
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
 
 // maxResponseBytes is the maximum size of a JSON-serialized tool response
-// before it gets truncated. 128KB is well within LLM context limits while
-// still allowing substantial resource output.
-const maxResponseBytes = 128 * 1024
+// before it gets compacted. The application consuming these tool responses
+// rejects content above 128KiB, so a 64KiB payload budget leaves headroom for
+// the MCP/JSON-RPC envelope and string escaping.
+const maxResponseBytes = 64 * 1024
+
+type jsonCompactionLimits struct {
+	maxStringBytes    int
+	maxCollectionSize int
+	maxMapEntries     int
+}
+
+var jsonCompactionSteps = []jsonCompactionLimits{
+	{maxStringBytes: 16 * 1024, maxCollectionSize: 100, maxMapEntries: 128},
+	{maxStringBytes: 8 * 1024, maxCollectionSize: 50, maxMapEntries: 96},
+	{maxStringBytes: 4 * 1024, maxCollectionSize: 25, maxMapEntries: 64},
+	{maxStringBytes: 2 * 1024, maxCollectionSize: 10, maxMapEntries: 48},
+	{maxStringBytes: 1024, maxCollectionSize: 5, maxMapEntries: 32},
+}
 
 // base64MinLen is the minimum length of a string before we test whether it
 // looks like base64.  Short strings are cheap and unlikely to be binary blobs.
@@ -231,9 +248,24 @@ func SanitizeText(s string) string {
 	s = replaceInlineBase64(s)
 	if len(s) > maxResponseBytes {
 		total := len(s)
-		s = s[:maxResponseBytes] + fmt.Sprintf("\n[OUTPUT TRUNCATED - %d bytes total, showing first %d]", total, maxResponseBytes)
+		notice := fmt.Sprintf("\n[OUTPUT TRUNCATED - %d bytes total; use narrower filters or limits]", total)
+		s = truncateUTF8(s, maxResponseBytes-len(notice)) + notice
 	}
 	return s
+}
+
+func truncateUTF8(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end]
 }
 
 func redactSensitiveText(s string) string {
@@ -325,11 +357,105 @@ func replaceInlineBase64(s string) string {
 	})
 }
 
-// TruncateJSON truncates a JSON byte slice if it exceeds maxResponseBytes.
+// TruncateJSON compacts an oversized JSON response while preserving valid JSON
+// and a useful prefix of the original content. It never replaces the response
+// with an error-only object: callers receive explicit truncation metadata and
+// can refine the next query with a namespace, selector, or limit.
 func TruncateJSON(data []byte) []byte {
 	if len(data) <= maxResponseBytes {
 		return data
 	}
-	msg := fmt.Sprintf(`{"error":"response too large","totalBytes":%d,"maxBytes":%d,"hint":"Use more specific queries or filters to reduce output size"}`, len(data), maxResponseBytes)
-	return []byte(msg)
+
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return marshalCompactionMetadata(len(data), "The oversized response was not valid JSON")
+	}
+
+	for _, limits := range jsonCompactionSteps {
+		compacted := compactJSONValue(value, limits)
+		candidate, err := json.Marshal(addCompactionMetadata(compacted, len(data)))
+		if err == nil && len(candidate) <= maxResponseBytes {
+			return candidate
+		}
+	}
+
+	return marshalCompactionMetadata(len(data), "The response could not retain content within the output budget")
+}
+
+func compactJSONValue(value interface{}, limits jsonCompactionLimits) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		kept := len(keys)
+		if kept > limits.maxMapEntries {
+			kept = limits.maxMapEntries
+		}
+		compacted := make(map[string]interface{}, kept+1)
+		for _, key := range keys[:kept] {
+			compacted[key] = compactJSONValue(typed[key], limits)
+		}
+		if omitted := len(keys) - kept; omitted > 0 {
+			compacted["_responseTruncatedFields"] = omitted
+		}
+		return compacted
+	case []interface{}:
+		kept := len(typed)
+		if kept > limits.maxCollectionSize {
+			kept = limits.maxCollectionSize
+		}
+		compacted := make([]interface{}, 0, kept+1)
+		for _, item := range typed[:kept] {
+			compacted = append(compacted, compactJSONValue(item, limits))
+		}
+		if omitted := len(typed) - kept; omitted > 0 {
+			compacted = append(compacted, map[string]interface{}{
+				"_responseTruncatedItems": omitted,
+			})
+		}
+		return compacted
+	case string:
+		if len(typed) <= limits.maxStringBytes {
+			return typed
+		}
+		notice := fmt.Sprintf("...[TRUNCATED; %d BYTES TOTAL]", len(typed))
+		return truncateUTF8(typed, limits.maxStringBytes-len(notice)) + notice
+	default:
+		return value
+	}
+}
+
+func addCompactionMetadata(value interface{}, totalBytes int) interface{} {
+	metadata := compactionMetadata(totalBytes, "Response content was compacted; use narrower filters or limits for omitted details")
+	if object, ok := value.(map[string]interface{}); ok {
+		object["_responseMetadata"] = metadata
+		return object
+	}
+	return map[string]interface{}{
+		"items":             value,
+		"_responseMetadata": metadata,
+	}
+}
+
+func marshalCompactionMetadata(totalBytes int, hint string) []byte {
+	data, err := json.Marshal(map[string]interface{}{
+		"_responseMetadata": compactionMetadata(totalBytes, hint),
+	})
+	if err != nil {
+		return []byte(`{"_responseMetadata":{"truncated":true}}`)
+	}
+	return data
+}
+
+func compactionMetadata(totalBytes int, hint string) map[string]interface{} {
+	return map[string]interface{}{
+		"truncated":  true,
+		"totalBytes": totalBytes,
+		"maxBytes":   maxResponseBytes,
+		"hint":       hint,
+	}
 }

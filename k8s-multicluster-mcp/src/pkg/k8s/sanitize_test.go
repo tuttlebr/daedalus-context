@@ -3,8 +3,10 @@ package k8s
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSanitizeResource_SecretRedaction(t *testing.T) {
@@ -296,7 +298,7 @@ func TestSanitizeText_Truncation(t *testing.T) {
 	large := strings.Repeat("a", maxResponseBytes+1000)
 	result := SanitizeText(large)
 
-	if len(result) > maxResponseBytes+200 { // allow room for the truncation message
+	if len(result) > maxResponseBytes {
 		t.Errorf("output was not truncated: got %d bytes", len(result))
 	}
 	if !strings.Contains(result, "TRUNCATED") {
@@ -310,16 +312,37 @@ func TestTruncateJSON(t *testing.T) {
 		t.Error("small JSON was incorrectly truncated")
 	}
 
-	large := make([]byte, maxResponseBytes+1)
-	for i := range large {
-		large[i] = 'x'
+	large, err := json.Marshal(map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{"name": "first", "manifest": strings.Repeat("x", maxResponseBytes)},
+			map[string]interface{}{"name": "second", "manifest": strings.Repeat("y", maxResponseBytes)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	result := TruncateJSON(large)
-	if len(result) >= len(large) {
-		t.Error("large JSON was not truncated")
+	if len(result) > maxResponseBytes {
+		t.Fatalf("large JSON result has %d bytes", len(result))
 	}
-	if !strings.Contains(string(result), "response too large") {
-		t.Error("truncation error message not present")
+	if !json.Valid(result) {
+		t.Fatalf("compacted response is not valid JSON: %s", result)
+	}
+	if strings.Contains(string(result), `"error":"response too large"`) {
+		t.Fatalf("compacted response discarded useful content: %s", result)
+	}
+	if !strings.Contains(string(result), `"_responseMetadata"`) || !strings.Contains(string(result), `"first"`) {
+		t.Fatalf("compacted response lacks metadata or retained content: %s", result)
+	}
+}
+
+func TestSanitizeTextTruncationPreservesUTF8(t *testing.T) {
+	result := SanitizeText(strings.Repeat("🙂", maxResponseBytes))
+	if !utf8.ValidString(result) {
+		t.Fatal("truncation split a UTF-8 code point")
+	}
+	if len(result) > maxResponseBytes {
+		t.Fatalf("truncated UTF-8 output has %d bytes", len(result))
 	}
 }
 

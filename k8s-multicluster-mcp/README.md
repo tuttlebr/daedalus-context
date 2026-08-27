@@ -195,7 +195,9 @@ Every registered tool goes through the audited registration wrapper in `main.go`
 - Pod logs, resource YAML, Helm release output, GPU/operator logs, kubectl output, and agent output are redacted for secret-like values.
 - Kubernetes Secret `data` and `stringData` values are redacted, including short base64 values.
 - Sensitive key names such as passwords, tokens, authorization headers, certificates, and private keys are redacted recursively in structured output.
-- Large responses are truncated before they are returned to the agent.
+- Tool text is capped at 64 KiB, leaving headroom below the consuming application's 128 KiB limit.
+- Oversized JSON remains valid and retains a compact prefix plus `_responseMetadata` instead of becoming an error-only response.
+- High-volume discovery, resource-list, event, and cluster-summary tools use compact defaults; callers can opt into bounded detail or apply narrower filters.
 
 ### Idempotent Apply Behavior
 
@@ -353,8 +355,8 @@ release or Kubernetes volume configuration.
 
 | Tool                    | Description                                                 | Key Parameters                                          |
 | ----------------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
-| `getAPIResources`       | List all available API resource types in the cluster        | `includeNamespaceScoped`, `includeClusterScoped`        |
-| `listResources`         | List resources of a specific type, optionally filtered      | `kind`\*, `namespace`, `labelSelector`, `fieldSelector` |
+| `getAPIResources`       | Search available API resource types with a bounded result    | `includeNamespaceScoped`, `includeClusterScoped`, `query`, `limit` |
+| `listResources`         | List compact resource summaries, optionally filtered         | `kind`\*, `namespace`, `labelSelector`, `fieldSelector`, `includeDetails`, `limit` |
 | `getResource`           | Get full JSON of a single resource                          | `kind`\*, `name`\*, `namespace`                         |
 | `describeResource`      | Human-friendly description with events and owner refs       | `kind`\*, `name`\*, `namespace`                         |
 | `getResourceYAML`       | Export resource as clean YAML                               | `kind`\*, `name`\*, `namespace`                         |
@@ -370,14 +372,14 @@ release or Kubernetes volume configuration.
 | Tool                | Description                                          | Key Parameters                    |
 | ------------------- | ---------------------------------------------------- | --------------------------------- |
 | `getClusterHealth`  | Cluster health report (nodes, control plane, events) | `includeMetrics`, `includeEvents` |
-| `getClusterSummary` | Concise cluster status overview                      | `includeNamespaceDetails`         |
+| `getClusterSummary` | Concise cluster status overview; namespace detail is opt-in | `includeNamespaceDetails`         |
 | `getTopPods`        | Top pods by CPU or memory usage                      | `namespace`, `sortBy`, `limit`    |
 | `getTopNodes`       | Top nodes by resource utilization                    | `sortBy`, `includeConditions`     |
 | `getNodeMetrics`    | CPU/memory metrics for a specific node               | `name`\*                          |
 | `getPodMetrics`     | CPU/memory metrics for a specific pod                | `namespace`\*, `podName`\*        |
 | `getResourceQuotas` | Resource quotas and usage                            | `namespace`, `showPercentage`     |
 | `getLimitRanges`    | Limit ranges in namespaces                           | `namespace`                       |
-| `getEvents`         | Cluster events, optionally filtered                  | `namespace`, `labelSelector`      |
+| `getEvents`         | Newest cluster events, optionally filtered and bounded | `namespace`, `labelSelector`, `limit` |
 | `getRolloutStatus`  | Rollout status for Deployment/StatefulSet/DaemonSet  | `kind`\*, `name`\*, `namespace`\* |
 
 #### Debugging & Troubleshooting
