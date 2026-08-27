@@ -43,13 +43,17 @@ nv-ingest:
                 values: [daedalus-06]
   redis:
     master:
+      nodeSelector:
+        kubernetes.io/hostname: daedalus-02
       persistence:
-        storageClass: nfs-client
+        storageClass: local-fast
         size: 50Gi
     replica:
       replicaCount: 1
+      nodeSelector:
+        kubernetes.io/hostname: daedalus-03
       persistence:
-        storageClass: nfs-client
+        storageClass: local-fast
         size: 50Gi
 
 # podDisruptionBudget configures the API availability budget missing upstream.

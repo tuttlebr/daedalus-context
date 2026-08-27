@@ -1,0 +1,39 @@
+nfs:
+  server: 192.168.1.77
+  path: /var/nfs/shared/kubernetes
+  mountOptions:
+    - rw
+    - noatime
+    - rsize=1048576
+    - wsize=1048576
+    - hard
+    - lock
+    - proto=tcp
+    - timeo=600
+    - retrans=2
+    - sec=sys
+    - fsc
+    - local_lock=none
+  volumeName: nfs-subdir-external-provisioner-root
+  reclaimPolicy: Retain
+
+storageClass:
+  create: true
+  defaultClass: true
+  name: nfs-client
+  allowVolumeExpansion: true
+  reclaimPolicy: Delete
+  archiveOnDelete: true
+  accessModes: ReadWriteOnce
+  volumeBindingMode: Immediate
+
+leaderElection:
+  enabled: true
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+strategyType: Recreate

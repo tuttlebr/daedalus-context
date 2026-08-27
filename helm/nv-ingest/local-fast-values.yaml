@@ -1,0 +1,12 @@
+nv-ingest:
+  redis:
+    master:
+      nodeSelector:
+        kubernetes.io/hostname: daedalus-02
+      persistence:
+        storageClass: local-fast
+    replica:
+      nodeSelector:
+        kubernetes.io/hostname: daedalus-03
+      persistence:
+        storageClass: local-fast

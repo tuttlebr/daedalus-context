@@ -34,7 +34,7 @@ override URL_INGEST_NAMESPACE := $(DAEDALUS_NAMESPACE)
 override K8S_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
 override UNIFI_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
 override RETRIEVER_NAMESPACE := $(DAEDALUS_NAMESPACE)
-K8S_MCP_NODE_PORT ?= 30080
+K8S_MCP_NODE_PORT ?= 30800
 UNIFI_MCP_NODE_PORT ?= 30081
 MCP_EXTERNAL_CLIENT_CIDR ?= 192.168.1.0/24
 MCP_EXTERNAL_ENABLED ?= false
@@ -150,7 +150,7 @@ endif
 	images-validate images-build images-push images-release-refs images-publish \
 	compose-config compose-build compose-push compose-release-refs compose-publish \
 	preflight validate validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy \
-	verify-shared-secrets migrate-legacy-secrets migrate-hindsight enable-schedules enable-external-mcp cleanup-legacy \
+	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
 	deploy-hindsight deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
@@ -166,7 +166,7 @@ endif
 	healthcheck-k8s-mcp healthcheck-unifi-mcp
 
 CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update redeploy \
-	verify-shared-secrets migrate-legacy-secrets migrate-hindsight enable-schedules enable-external-mcp cleanup-legacy \
+	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	health-provider health-dependencies health-integration health-stack healthcheck healthcheck-agent \
 	publish-corpus stage-data seed-data run-ingest \
 	deploy-hindsight deploy-milvus deploy-retriever deploy-nv-ingest deploy-pdf-server deploy-url-ingest deploy-k8s-mcp deploy-unifi-mcp \
@@ -326,6 +326,19 @@ migrate-hindsight: preflight ## [cluster/data write] Copy Hindsight into daedalu
 	@[[ -d "$(HINDSIGHT_ROOT)" ]] || { echo "Missing Hindsight repository: $(HINDSIGHT_ROOT)" >&2; exit 1; }
 	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" migrate-namespace \
 	  NAMESPACE="$(DAEDALUS_NAMESPACE)" EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)"
+
+deploy-local-fast-storage: preflight ## [cluster write] Install the non-default local-fast StorageClass.
+	@EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)" \
+	  bash "$(ROOT_DIR)/nim-milvus-ms/deploy-local-fast-storage.sh"
+
+deploy-nfs-locking: preflight ## [cluster write] Enable server-coordinated locking for future UNAS NFS mounts.
+	@EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)" \
+	  bash "$(ROOT_DIR)/nim-milvus-ms/deploy-nfs-locking.sh"
+
+patch-nfs-pv-locking: preflight ## [cluster write] Converge existing UNAS PV mount options after canary validation.
+	@EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)" \
+	  APPLY_NFS_PV_LOCKING="$(APPLY_NFS_PV_LOCKING)" \
+	  bash "$(ROOT_DIR)/nim-milvus-ms/patch-unas-pv-locking.sh"
 
 cleanup-legacy: preflight ## [destructive] Remove accepted legacy namespaces, RBAC, retained PVs, and exact local paths.
 	@KUBECTL="$(KUBECTL)" HELM="$(HELM)" \
