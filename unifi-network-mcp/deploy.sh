@@ -259,14 +259,14 @@ EOF
 fi
 
 if ! is_true "${DRY_RUN}" && is_true "${BUILD_IMAGE}"; then
-  UNIFI_MCP_COMPOSE_IMAGE="${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0}" \
+  UNIFI_MCP_COMPOSE_IMAGE="${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.2.0}" \
     docker compose --project-directory "${WORKSPACE_DIR}" \
       --file "${WORKSPACE_DIR}/docker-compose.yaml" \
       build unifi-network-mcp-server
 fi
 
 if ! is_true "${DRY_RUN}" && is_true "${PUSH_IMAGE}"; then
-  UNIFI_MCP_COMPOSE_IMAGE="${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0}" \
+  UNIFI_MCP_COMPOSE_IMAGE="${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.2.0}" \
     docker compose --project-directory "${WORKSPACE_DIR}" \
       --file "${WORKSPACE_DIR}/docker-compose.yaml" \
       push unifi-network-mcp-server

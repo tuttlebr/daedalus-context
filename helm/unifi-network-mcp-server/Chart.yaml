@@ -1,7 +1,7 @@
 apiVersion: v2
 name: unifi-network-mcp-server
-description: Read-only UniFi Network MCP server for Daedalus
+description: UniFi Network MCP server with read and mutation tools for Daedalus
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 kubeVersion: ">=1.27.0-0"

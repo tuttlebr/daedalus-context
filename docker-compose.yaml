@@ -46,7 +46,7 @@ services:
     build:
       context: ./unifi-network-mcp/src
       dockerfile: Dockerfile
-    image: ${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.1.0}
+    image: ${UNIFI_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.2.0}
     environment:
       SERVER_MODE: streamable-http
       SERVER_PORT: "8080"
