@@ -9,8 +9,18 @@ embedder:
   service:
     type: ClusterIP
     port: 8000
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
 
 reranker:
   service:
     type: ClusterIP
     port: 8000
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule

@@ -61,19 +61,13 @@ metrics:
 
 topologySpreadConstraints: []
 
-# Keep Milvus application pods off the heterogeneous ARM64 worker. The
-# upstream image starts on that node, but streaming nodes can fail closed while
-# the dependency cluster is reconciling. MinIO and etcd retain their own
-# placement policies and existing PVC topology.
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: NotIn
-              values:
-                - daedalus-06
+# Milvus v2.6.11 publishes amd64 and arm64 images. Tolerate the reservation
+# taint on the GB10 worker while leaving amd64-only workloads protected.
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
 
 service:
   type: ClusterIP

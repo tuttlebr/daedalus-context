@@ -115,16 +115,32 @@ class RootInterfaceTests(unittest.TestCase):
         milvus_values = yaml.safe_load(
             (ROOT / "nim-milvus-ms/custom-values.yaml").read_text(encoding="utf-8")
         )
-        expected = {
+        expected_exclusion = {
             "key": "kubernetes.io/hostname",
             "operator": "NotIn",
             "values": ["daedalus-06"],
         }
-        for affinity in (milvus_values["affinity"], milvus_values["minio"]["affinity"]):
-            expressions = affinity["nodeAffinity"][
-                "requiredDuringSchedulingIgnoredDuringExecution"
-            ]["nodeSelectorTerms"][0]["matchExpressions"]
-            self.assertIn(expected, expressions)
+        expressions = milvus_values["minio"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchExpressions"]
+        self.assertIn(expected_exclusion, expressions)
+
+    def test_multiarch_milvus_tolerates_the_arm64_gpu_worker(self) -> None:
+        expected_toleration = {
+            "key": "nvidia.com/gpu",
+            "operator": "Equal",
+            "value": "true",
+            "effect": "NoSchedule",
+        }
+        for path, root_key in (
+            (ROOT / "nim-milvus-ms/custom-values.yaml", None),
+            (ROOT / "helm/milvus/values.yaml", "milvus"),
+        ):
+            values = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if root_key is not None:
+                values = values[root_key]
+            self.assertIn(expected_toleration, values["tolerations"], path)
+            self.assertNotIn("affinity", values, path)
 
     def test_every_root_readme_make_command_exists(self) -> None:
         commands = set(
