@@ -7,11 +7,90 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tuttlebr/unifi-network-mcp/pkg/unifi"
 )
+
+func TestEndpointHandlerRejectsInvalidSiteBeforeControllerRequest(t *testing.T) {
+	var calls atomic.Int32
+	controller := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer controller.Close()
+	insecure := true
+	for _, name := range []string{"listAdoptedDevices", "deleteNetwork"} {
+		endpoint, _ := unifi.EndpointByName(name)
+		handler := EndpointHandler(endpoint, ClientDefaults{
+			BaseURL: controller.URL, APIKey: "test-key", InsecureSkipVerify: &insecure, Locked: true,
+		})
+		for _, value := range []any{nil, "", "default", "Default", 42, "11111111111141118111111111111111", "urn:uuid:11111111-1111-4111-8111-111111111111", "11111111-1111-4111-8111-11111111111z"} {
+			result, err := handler(context.Background(), mcp.CallToolRequest{
+				Params: mcp.CallToolParams{Arguments: map[string]any{
+					"siteId": value, "networkId": "22222222-2222-4222-8222-222222222222",
+				}},
+			})
+			if err != nil || result == nil || !result.IsError {
+				t.Fatalf("%s siteId=%v: want tool error, got result=%#v err=%v", name, value, result, err)
+			}
+			message := result.Content[0].(mcp.TextContent).Text
+			for _, guidance := range []string{"invalid siteId", "listSites", "data[].id", "internalReference", "before retrying"} {
+				if !strings.Contains(message, guidance) {
+					t.Errorf("%s siteId=%v: error omitted %q: %s", name, value, guidance, message)
+				}
+			}
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("invalid site IDs reached controller %d times", calls.Load())
+	}
+}
+
+func TestUUIDParameterValidation(t *testing.T) {
+	endpoint, _ := unifi.EndpointByName("getAdoptedDeviceDetails")
+	if _, err := buildPath(endpoint, map[string]any{
+		"siteId": "11111111-1111-4111-8111-111111111111", "deviceId": "device-name",
+	}); err == nil || !strings.Contains(err.Error(), "deviceId must be a UUID") {
+		t.Fatalf("invalid device UUID was accepted: %v", err)
+	}
+	ordering, _ := unifi.EndpointByName("getFirewallPolicyOrdering")
+	if _, err := buildQuery(ordering, map[string]any{
+		"sourceFirewallZoneId": "source-zone", "destinationFirewallZoneId": "55555555-5555-4555-8555-555555555555",
+	}); err == nil || !strings.Contains(err.Error(), "sourceFirewallZoneId must be a UUID") {
+		t.Fatalf("invalid query UUID was accepted: %v", err)
+	}
+	for _, value := range []string{
+		"11111111-1111-4111-8111-111111111111",
+		"abcdefab-cdef-3abc-abcd-abcdefabcdef",
+		"ABCDEFAB-CDEF-3ABC-ABCD-ABCDEFABCDEF",
+	} {
+		got, _, err := getParameterTextArg(map[string]any{"id": value}, "id", unifi.ParameterSchema{Type: "string", Format: "uuid"}, true)
+		if err != nil || got != value {
+			t.Errorf("valid UUID %q rejected or rewritten: %q, %v", value, got, err)
+		}
+	}
+}
+
+func TestEndpointHandlerReturnsControllerFailureAsToolError(t *testing.T) {
+	controller := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"Unsupported filter"}`))
+	}))
+	defer controller.Close()
+	insecure := true
+	endpoint, _ := unifi.EndpointByName("listSites")
+	handler := EndpointHandler(endpoint, ClientDefaults{BaseURL: controller.URL, APIKey: "test-key", InsecureSkipVerify: &insecure})
+	result, err := handler(context.Background(), mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{}}})
+	if err != nil || result == nil || !result.IsError {
+		t.Fatalf("want tool error instead of internal MCP error: result=%#v err=%v", result, err)
+	}
+	if text := result.Content[0].(mcp.TextContent).Text; !strings.Contains(text, "400 Bad Request") || !strings.Contains(text, "Unsupported filter") {
+		t.Fatalf("controller error context lost: %s", text)
+	}
+}
 
 func TestClientFromArgsRequiresClientSuppliedConnection(t *testing.T) {
 	if _, err := clientFromArgs(map[string]interface{}{}, ClientDefaults{}); err == nil {
@@ -193,14 +272,14 @@ func TestBuildQueryRequiresFirewallPolicyOrderingZonePair(t *testing.T) {
 		t.Fatal("getFirewallPolicyOrdering endpoint missing")
 	}
 	args := map[string]interface{}{
-		"sourceFirewallZoneId":      "source-zone",
-		"destinationFirewallZoneId": "destination-zone",
+		"sourceFirewallZoneId":      "44444444-4444-4444-8444-444444444444",
+		"destinationFirewallZoneId": "55555555-5555-4555-8555-555555555555",
 	}
 	query, err := buildQuery(endpoint, args)
 	if err != nil {
 		t.Fatalf("buildQuery failed: %v", err)
 	}
-	if query.Get("sourceFirewallZoneId") != "source-zone" || query.Get("destinationFirewallZoneId") != "destination-zone" {
+	if query.Get("sourceFirewallZoneId") != "44444444-4444-4444-8444-444444444444" || query.Get("destinationFirewallZoneId") != "55555555-5555-4555-8555-555555555555" {
 		t.Fatalf("query = %q", query.Encode())
 	}
 	delete(args, "destinationFirewallZoneId")
@@ -214,7 +293,7 @@ func TestEndpointHandlerSendsMutationMethodQueryAndBody(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("method = %s, want PUT", r.Method)
 		}
-		if r.URL.Path != "/v1/sites/site-1/networks/network-1" {
+		if r.URL.Path != "/v1/sites/11111111-1111-4111-8111-111111111111/networks/22222222-2222-4222-8222-222222222222" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		var body map[string]interface{}
@@ -225,7 +304,7 @@ func TestEndpointHandlerSendsMutationMethodQueryAndBody(t *testing.T) {
 			t.Fatalf("body = %#v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"network-1","name":"Updated network"}`))
+		_, _ = w.Write([]byte(`{"id":"22222222-2222-4222-8222-222222222222","name":"Updated network"}`))
 	}))
 	defer server.Close()
 
@@ -241,8 +320,8 @@ func TestEndpointHandlerSendsMutationMethodQueryAndBody(t *testing.T) {
 	})
 	result, err := handler(context.Background(), mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Arguments: map[string]interface{}{
-			"siteId":    "site-1",
-			"networkId": "network-1",
+			"siteId":    "11111111-1111-4111-8111-111111111111",
+			"networkId": "22222222-2222-4222-8222-222222222222",
 			"body": map[string]interface{}{
 				"name": "Updated network",
 			},
@@ -251,7 +330,7 @@ func TestEndpointHandlerSendsMutationMethodQueryAndBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler failed: %v", err)
 	}
-	if result == nil || !strings.Contains(result.Content[0].(mcp.TextContent).Text, `"id":"network-1"`) {
+	if result == nil || !strings.Contains(result.Content[0].(mcp.TextContent).Text, `"id":"22222222-2222-4222-8222-222222222222"`) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -262,19 +341,19 @@ func TestBuildPathUsesIntegerPathParameter(t *testing.T) {
 		t.Fatal("executePortAction endpoint missing")
 	}
 	path, err := buildPath(endpoint, map[string]interface{}{
-		"siteId":   "site-1",
-		"deviceId": "device-1",
+		"siteId":   "11111111-1111-4111-8111-111111111111",
+		"deviceId": "33333333-3333-4333-8333-333333333333",
 		"portIdx":  float64(7),
 	})
 	if err != nil {
 		t.Fatalf("buildPath failed: %v", err)
 	}
-	if path != "/v1/sites/site-1/devices/device-1/interfaces/ports/7/actions" {
+	if path != "/v1/sites/11111111-1111-4111-8111-111111111111/devices/33333333-3333-4333-8333-333333333333/interfaces/ports/7/actions" {
 		t.Fatalf("path = %q", path)
 	}
 	if _, err := buildPath(endpoint, map[string]interface{}{
-		"siteId":   "site-1",
-		"deviceId": "device-1",
+		"siteId":   "11111111-1111-4111-8111-111111111111",
+		"deviceId": "33333333-3333-4333-8333-333333333333",
 		"portIdx":  "seven",
 	}); err == nil {
 		t.Fatal("expected non-integer portIdx error")

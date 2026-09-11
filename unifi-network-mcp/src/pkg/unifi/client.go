@@ -17,7 +17,7 @@ const (
 	maxReadBytes      = 4 * 1024 * 1024
 	maxRequestBytes   = 1 * 1024 * 1024
 	maxErrorBodyBytes = 16 * 1024
-	userAgent         = "unifi-network-mcp/0.2.0"
+	userAgent         = "unifi-network-mcp/0.2.1"
 	defaultTimeout    = 30 * time.Second
 )
 

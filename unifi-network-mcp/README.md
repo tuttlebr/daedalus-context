@@ -58,6 +58,16 @@ curl http://localhost:8080/readyz
 curl http://localhost:8080/dependencyz
 ```
 
+Call `listSites` and wait for its response before issuing site-scoped calls.
+Use the selected site's UUID from `data[].id` as `siteId`; `name` and
+`internalReference` (for example, `default`) are not site IDs. Reuse an ID
+already confirmed for the intended controller and site.
+
+UUID path and query parameters are validated before contacting the controller.
+Invalid arguments and controller failures return MCP tool results with
+`isError: true` and an error message. Correct invalid arguments before retrying;
+do not repeat an unchanged failed request.
+
 Example tool-call arguments for `listSites`:
 
 ```json

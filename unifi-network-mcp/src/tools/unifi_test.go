@@ -2,10 +2,35 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/tuttlebr/unifi-network-mcp/pkg/unifi"
 )
+
+func TestSiteScopedToolsExplainUUIDDiscovery(t *testing.T) {
+	for _, tool := range EndpointTools() {
+		property, scoped := tool.InputSchema.Properties["siteId"]
+		if !scoped {
+			continue
+		}
+		schema := property.(map[string]any)
+		if schema["format"] != "uuid" || !requiredContains(tool.InputSchema.Required, "siteId") {
+			t.Errorf("%s must require a site UUID", tool.Name)
+		}
+		description := schema["description"].(string)
+		for _, fragment := range []string{"listSites", "wait for its result", "data[].id", "internalReference", "default"} {
+			if !strings.Contains(description, fragment) {
+				t.Errorf("%s siteId description omits %q", tool.Name, fragment)
+			}
+		}
+	}
+	endpoint, _ := unifi.EndpointByName("listSites")
+	tool := EndpointTool(endpoint, ToolDefaults{})
+	if !strings.Contains(tool.Description, "data[].id") || !strings.Contains(tool.Description, "internalReference") {
+		t.Fatalf("site discovery omits ID selection guidance: %s", tool.Description)
+	}
+}
 
 func TestEndpointToolAnnotationsAreReadOnly(t *testing.T) {
 	endpoint, ok := unifi.EndpointByName("listSites")

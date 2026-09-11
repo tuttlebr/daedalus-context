@@ -2,6 +2,10 @@ package unifi
 
 import "strings"
 
+// SiteIDGuidance explains discovery and the distinction between integration
+// API UUIDs and legacy controller site references.
+const SiteIDGuidance = "Call listSites first and wait for its result, then use the selected site's UUID from data[].id. Do not use name or internalReference (such as default) as siteId."
+
 // Endpoint describes a UniFi Network integration API operation exposed as an
 // MCP tool.
 type Endpoint struct {
@@ -140,7 +144,7 @@ var readOnlyEndpoints = []Endpoint{
 	},
 	{
 		Name:               "listSites",
-		Description:        "Retrieve a paginated list of local sites managed by this Network application. Use a site id from this response for site-scoped tools.",
+		Description:        "Retrieve a paginated list of local sites managed by this Network application. " + SiteIDGuidance,
 		Method:             methodGET,
 		Path:               "/v1/sites",
 		SupportsPagination: true,

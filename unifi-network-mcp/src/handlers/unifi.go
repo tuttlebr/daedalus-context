@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tuttlebr/unifi-network-mcp/pkg/unifi"
 )
@@ -27,32 +28,32 @@ func EndpointHandler(endpoint unifi.Endpoint, defaults ClientDefaults) func(ctx 
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, ok := request.Params.Arguments.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("invalid arguments type: expected map[string]interface{}")
+			return mcp.NewToolResultError("invalid arguments: expected a JSON object"), nil
 		}
 
 		client, err := clientFromArgs(args, defaults)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		path, err := buildPath(endpoint, args)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		query, err := buildQuery(endpoint, args)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		body, err := buildRequestBody(endpoint, args)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		data, err := client.DoJSON(ctx, endpoint.Method, path, query, body)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
@@ -108,6 +109,9 @@ func buildPath(endpoint unifi.Endpoint, args map[string]interface{}) (string, er
 	for _, param := range endpoint.PathParams {
 		value, _, err := getParameterTextArg(args, param, endpoint.PathParameterSchema(param), true)
 		if err != nil {
+			if param == "siteId" {
+				return "", fmt.Errorf("invalid siteId: %w. %s Correct the arguments before retrying", err, unifi.SiteIDGuidance)
+			}
 			return "", err
 		}
 		path = strings.ReplaceAll(path, "{"+param+"}", url.PathEscape(value))
@@ -210,6 +214,9 @@ func getParameterTextArg(args map[string]interface{}, key string, schema unifi.P
 				return "", true, fmt.Errorf("missing required parameter: %s", key)
 			}
 			return "", false, nil
+		}
+		if schema.Format == "uuid" && (len(text) != 36 || uuid.Validate(text) != nil) {
+			return "", true, fmt.Errorf("%s must be a UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx form", key)
 		}
 		return text, true, nil
 	case "integer":

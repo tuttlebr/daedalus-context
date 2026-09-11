@@ -53,7 +53,7 @@ func main() {
 
 	s := server.NewMCPServer(
 		"UniFi Network MCP Server",
-		"0.2.0",
+		"0.2.1",
 		server.WithResourceCapabilities(true, true),
 	)
 

@@ -83,7 +83,9 @@ func EndpointTool(endpoint unifi.Endpoint, defaults ToolDefaults) mcp.Tool {
 
 	for _, param := range endpoint.PathParams {
 		schema := endpoint.PathParameterSchema(param)
-		if schema.Description == "" {
+		if param == "siteId" {
+			schema.Description = "Required site UUID. " + unifi.SiteIDGuidance
+		} else if schema.Description == "" {
 			schema.Description = fmt.Sprintf("Required path parameter %q for %s.", param, endpoint.Path)
 		}
 		options = append(options, withParameter(param, schema, true))
