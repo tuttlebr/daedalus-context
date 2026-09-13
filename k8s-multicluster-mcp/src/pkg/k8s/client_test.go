@@ -2,13 +2,19 @@ package k8s
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // newTestClient builds a Client with a pre-populated GVR cache, simulating
@@ -244,6 +250,177 @@ func TestRunKubectlCommandMissingBinary(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "kubectl binary not found in PATH") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func newClusterSummaryTestClient(t *testing.T, handler http.HandlerFunc) *Client {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	clientset, err := kubernetes.NewForConfig(&rest.Config{
+		Host:  server.URL,
+		QPS:   1000,
+		Burst: 1000,
+	})
+	if err != nil {
+		t.Fatalf("create test clientset: %v", err)
+	}
+	return &Client{clientset: clientset}
+}
+
+func writeClusterSummaryTestResponse(w http.ResponseWriter, path, namespaceItems string) {
+	w.Header().Set("Content-Type", "application/json")
+	if path == "/version" {
+		_, _ = fmt.Fprint(w, `{"major":"1","minor":"34","gitVersion":"v1.34.0","platform":"linux/amd64"}`)
+		return
+	}
+
+	apiVersion := "v1"
+	kind := ""
+	switch {
+	case path == "/api/v1/nodes":
+		kind = "NodeList"
+	case path == "/api/v1/namespaces":
+		kind = "NamespaceList"
+	case path == "/api/v1/events":
+		kind = "EventList"
+	case path == "/api/v1/pods" || strings.HasSuffix(path, "/pods"):
+		kind = "PodList"
+	case strings.HasSuffix(path, "/deployments"):
+		apiVersion, kind = "apps/v1", "DeploymentList"
+	case strings.HasSuffix(path, "/statefulsets"):
+		apiVersion, kind = "apps/v1", "StatefulSetList"
+	case strings.HasSuffix(path, "/daemonsets"):
+		apiVersion, kind = "apps/v1", "DaemonSetList"
+	case strings.HasSuffix(path, "/jobs"):
+		apiVersion, kind = "batch/v1", "JobList"
+	default:
+		http.Error(w, "unexpected path: "+path, http.StatusNotFound)
+		return
+	}
+
+	if kind == "NamespaceList" && namespaceItems != "" {
+		_, _ = fmt.Fprintf(w, `{"apiVersion":"v1","kind":"NamespaceList","items":[%s]}`, namespaceItems)
+		return
+	}
+	_, _ = fmt.Fprintf(w, `{"apiVersion":%q,"kind":%q,"items":[]}`, apiVersion, kind)
+}
+
+func TestGetClusterSummaryStartsIndependentReadsConcurrently(t *testing.T) {
+	var started atomic.Int32
+	readsStarted := make(chan struct{})
+	release := make(chan struct{})
+	var signalOnce sync.Once
+
+	client := newClusterSummaryTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			writeClusterSummaryTestResponse(w, r.URL.Path, "")
+			return
+		}
+		if started.Add(1) >= 4 {
+			signalOnce.Do(func() { close(readsStarted) })
+		}
+		select {
+		case <-release:
+			writeClusterSummaryTestResponse(w, r.URL.Path, "")
+		case <-r.Context().Done():
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.GetClusterSummary(ctx, false)
+		done <- err
+	}()
+
+	select {
+	case <-readsStarted:
+		close(release)
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("independent cluster reads did not overlap")
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("GetClusterSummary returned an error: %v", err)
+	}
+}
+
+func TestGetClusterSummaryBoundsNamespaceWorkloadConcurrency(t *testing.T) {
+	namespaceCount := clusterSummaryWorkloadConcurrency + 4
+	namespaceItems := make([]string, namespaceCount)
+	for i := range namespaceItems {
+		namespaceItems[i] = fmt.Sprintf(`{"metadata":{"name":"namespace-%d"}}`, i)
+	}
+
+	var started atomic.Int32
+	limitReached := make(chan struct{})
+	release := make(chan struct{})
+	var signalOnce sync.Once
+	client := newClusterSummaryTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/namespaces" {
+			writeClusterSummaryTestResponse(w, r.URL.Path, strings.Join(namespaceItems, ","))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/namespaces/namespace-") {
+			if started.Add(1) == clusterSummaryWorkloadConcurrency {
+				signalOnce.Do(func() { close(limitReached) })
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		writeClusterSummaryTestResponse(w, r.URL.Path, "")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.GetClusterSummary(ctx, true)
+		done <- err
+	}()
+
+	select {
+	case <-limitReached:
+		if got := started.Load(); got != clusterSummaryWorkloadConcurrency {
+			close(release)
+			t.Fatalf("started %d namespace workload reads while blocked, want %d", got, clusterSummaryWorkloadConcurrency)
+		}
+		close(release)
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("namespace detail reads did not fan out concurrently")
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("GetClusterSummary returned an error: %v", err)
+	}
+	wantWorkloadReads := int32(namespaceCount * 4)
+	if got := started.Load(); got != wantWorkloadReads {
+		t.Fatalf("namespace workload reads = %d, want %d", got, wantWorkloadReads)
+	}
+}
+
+func TestGetClusterSummaryReusesPodListForEventFiltering(t *testing.T) {
+	var clusterPodLists atomic.Int32
+	client := newClusterSummaryTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/pods" {
+			clusterPodLists.Add(1)
+		}
+		writeClusterSummaryTestResponse(w, r.URL.Path, "")
+	})
+
+	if _, err := client.GetClusterSummary(context.Background(), false); err != nil {
+		t.Fatalf("GetClusterSummary returned an error: %v", err)
+	}
+	if got := clusterPodLists.Load(); got != 1 {
+		t.Fatalf("cluster-wide pod lists = %d, want 1", got)
 	}
 }
 

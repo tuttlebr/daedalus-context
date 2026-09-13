@@ -43,8 +43,11 @@ import (
 // Client encapsulates Kubernetes client functionality including dynamic,
 // discovery, and metrics clients.
 // It also caches API resource information for performance.
-const gvrCacheTTL = 5 * time.Minute
-const dynamicListPageLimit int64 = 500
+const (
+	gvrCacheTTL                             = 5 * time.Minute
+	dynamicListPageLimit              int64 = 500
+	clusterSummaryWorkloadConcurrency       = 8
+)
 
 type Client struct {
 	clientset        *kubernetes.Clientset
@@ -1506,9 +1509,16 @@ func eventTimestamp(ev *corev1.Event) time.Time {
 // Events referencing pods not in this set are from old ReplicaSet generations
 // and should be treated as stale.
 func (c *Client) getActivePodUIDs(ctx context.Context) map[types.UID]bool {
-	uids := make(map[types.UID]bool)
 	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 	if err != nil {
+		return map[types.UID]bool{}
+	}
+	return activePodUIDsFromList(pods)
+}
+
+func activePodUIDsFromList(pods *corev1.PodList) map[types.UID]bool {
+	uids := make(map[types.UID]bool)
+	if pods == nil {
 		return uids
 	}
 	for i := range pods.Items {
@@ -1531,6 +1541,14 @@ func (c *Client) filterRecentEvents(ctx context.Context, window time.Duration, m
 	}
 
 	activePodUIDs := c.getActivePodUIDs(ctx)
+	return filterRecentEventList(allEvents, activePodUIDs, window, maxResults)
+}
+
+func filterRecentEventList(allEvents *corev1.EventList, activePodUIDs map[types.UID]bool, window time.Duration, maxResults int) []map[string]interface{} {
+	if allEvents == nil {
+		return nil
+	}
+
 	cutoff := time.Now().Add(-window)
 
 	type eventKey struct {
@@ -2994,16 +3012,84 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 		}
 	}
 
-	version, err := c.clientset.Discovery().ServerVersion()
-	if err == nil {
-		summary["serverVersion"] = version.GitVersion
-		summary["platform"] = version.Platform
+	cpLabels := []string{
+		"component=kube-apiserver",
+		"component=kube-controller-manager",
+		"component=kube-scheduler",
+		"component=etcd",
+	}
+
+	var (
+		serverVersion          string
+		serverPlatform         string
+		hasServerVersion       bool
+		nodes                  *corev1.NodeList
+		nodeErr                error
+		nsList                 *corev1.NamespaceList
+		namespaceDetails       []map[string]interface{}
+		namespaceErr           error
+		pods                   *corev1.PodList
+		podErr                 error
+		allEvents              *corev1.EventList
+		eventErr               error
+		controlPlanePodLists   = make([]*corev1.PodList, len(cpLabels))
+		controlPlaneListErrors = make([]error, len(cpLabels))
+	)
+
+	// These reads are independent. Namespace details are the exception: they
+	// fan out only after the namespace list is available.
+	var wg sync.WaitGroup
+	runAsync := func(fn func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn()
+		}()
+	}
+
+	runAsync(func() {
+		version, versionErr := c.clientset.Discovery().ServerVersion()
+		if versionErr == nil {
+			serverVersion = version.GitVersion
+			serverPlatform = version.Platform
+			hasServerVersion = true
+		}
+	})
+	runAsync(func() {
+		nodes, nodeErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	})
+	runAsync(func() {
+		nsList, namespaceErr = c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		if namespaceErr == nil && includeNamespaceDetails {
+			namespaceDetails = c.getClusterSummaryNamespaceDetails(ctx, nsList)
+		}
+	})
+	runAsync(func() {
+		pods, podErr = c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	})
+	runAsync(func() {
+		allEvents, eventErr = c.clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{
+			FieldSelector: "type!=Normal",
+		})
+	})
+	for i, label := range cpLabels {
+		i, label := i, label
+		runAsync(func() {
+			controlPlanePodLists[i], controlPlaneListErrors[i] = c.clientset.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+				LabelSelector: label,
+			})
+		})
+	}
+	wg.Wait()
+
+	if hasServerVersion {
+		summary["serverVersion"] = serverVersion
+		summary["platform"] = serverPlatform
 	}
 
 	// --- Node health ---
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		summary["nodeError"] = err.Error()
+	if nodeErr != nil {
+		summary["nodeError"] = nodeErr.Error()
 	} else {
 		readyCount := 0
 		notReadyNodes := []string{}
@@ -3033,9 +3119,8 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 	}
 
 	// --- Namespaces ---
-	nsList, err := c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		summary["namespaceError"] = err.Error()
+	if namespaceErr != nil {
+		summary["namespaceError"] = namespaceErr.Error()
 	} else {
 		nsNames := make([]string, 0, len(nsList.Items))
 		for i := range nsList.Items {
@@ -3049,110 +3134,13 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 	}
 
 	// --- Workload & pod rollup per namespace ---
-	if includeNamespaceDetails && nsList != nil {
-		nsDetails := make([]map[string]interface{}, 0, len(nsList.Items))
-
-		for i := range nsList.Items {
-			ns := nsList.Items[i].Name
-			detail := map[string]interface{}{"namespace": ns}
-
-			// Deployments
-			deps, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
-			if err == nil && len(deps.Items) > 0 {
-				total := len(deps.Items)
-				healthy := 0
-				unhealthy := []string{}
-				for j := range deps.Items {
-					d := &deps.Items[j]
-					if d.Status.ReadyReplicas == *d.Spec.Replicas && d.Status.UnavailableReplicas == 0 {
-						healthy++
-					} else {
-						unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
-							d.Name, d.Status.ReadyReplicas, *d.Spec.Replicas))
-					}
-				}
-				depInfo := map[string]interface{}{"total": total, "healthy": healthy}
-				if len(unhealthy) > 0 {
-					depInfo["unhealthy"] = unhealthy
-				}
-				detail["deployments"] = depInfo
-			}
-
-			// StatefulSets
-			sts, err := c.clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
-			if err == nil && len(sts.Items) > 0 {
-				total := len(sts.Items)
-				healthy := 0
-				unhealthy := []string{}
-				for j := range sts.Items {
-					s := &sts.Items[j]
-					if s.Status.ReadyReplicas == *s.Spec.Replicas {
-						healthy++
-					} else {
-						unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
-							s.Name, s.Status.ReadyReplicas, *s.Spec.Replicas))
-					}
-				}
-				stsInfo := map[string]interface{}{"total": total, "healthy": healthy}
-				if len(unhealthy) > 0 {
-					stsInfo["unhealthy"] = unhealthy
-				}
-				detail["statefulSets"] = stsInfo
-			}
-
-			// DaemonSets
-			dsList, err := c.clientset.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
-			if err == nil && len(dsList.Items) > 0 {
-				total := len(dsList.Items)
-				healthy := 0
-				unhealthy := []string{}
-				for j := range dsList.Items {
-					ds := &dsList.Items[j]
-					if ds.Status.NumberReady == ds.Status.DesiredNumberScheduled && ds.Status.NumberUnavailable == 0 {
-						healthy++
-					} else {
-						unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
-							ds.Name, ds.Status.NumberReady, ds.Status.DesiredNumberScheduled))
-					}
-				}
-				dsInfo := map[string]interface{}{"total": total, "healthy": healthy}
-				if len(unhealthy) > 0 {
-					dsInfo["unhealthy"] = unhealthy
-				}
-				detail["daemonSets"] = dsInfo
-			}
-
-			// Jobs with failures
-			jobs, err := c.clientset.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
-			if err == nil && len(jobs.Items) > 0 {
-				total := len(jobs.Items)
-				failed := 0
-				active := 0
-				succeeded := 0
-				for j := range jobs.Items {
-					job := &jobs.Items[j]
-					if job.Status.Failed > 0 {
-						failed++
-					} else if job.Status.Active > 0 {
-						active++
-					} else if job.Status.Succeeded > 0 {
-						succeeded++
-					}
-				}
-				detail["jobs"] = map[string]interface{}{
-					"total": total, "active": active, "succeeded": succeeded, "failed": failed,
-				}
-			}
-
-			nsDetails = append(nsDetails, detail)
-		}
-		summary["namespaceDetails"] = nsDetails
+	if includeNamespaceDetails && namespaceErr == nil {
+		summary["namespaceDetails"] = namespaceDetails
 	}
 
 	// --- Pod phase summary (cluster-wide) ---
-	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		summary["podError"] = err.Error()
+	if podErr != nil {
+		summary["podError"] = podErr.Error()
 	} else {
 		phaseCounts := map[string]int{}
 		crashLoopPods := []string{}
@@ -3178,19 +3166,10 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 	}
 
 	// --- Control plane quick check ---
-	cpLabels := []string{
-		"component=kube-apiserver",
-		"component=kube-controller-manager",
-		"component=kube-scheduler",
-		"component=etcd",
-	}
 	cpHealthy := true
 	cpIssues := []string{}
-	for _, label := range cpLabels {
-		cpPods, err := c.clientset.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
-			LabelSelector: label,
-		})
-		if err != nil || len(cpPods.Items) == 0 {
+	for i, cpPods := range controlPlanePodLists {
+		if controlPlaneListErrors[i] != nil || cpPods == nil || len(cpPods.Items) == 0 {
 			continue
 		}
 		for j := range cpPods.Items {
@@ -3210,10 +3189,154 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 	summary["controlPlane"] = cp
 
 	// --- Recent warning events (last 1 hour, stale events filtered) ---
-	warnings := c.filterRecentEvents(ctx, 1*time.Hour, 50)
-	if len(warnings) > 0 {
-		summary["recentWarnings"] = warnings
+	if eventErr == nil {
+		activePodUIDs := activePodUIDsFromList(pods)
+		if podErr != nil {
+			activePodUIDs = c.getActivePodUIDs(ctx)
+		}
+		warnings := filterRecentEventList(allEvents, activePodUIDs, 1*time.Hour, 50)
+		if len(warnings) > 0 {
+			summary["recentWarnings"] = warnings
+		}
 	}
 
 	return summary, nil
+}
+
+func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *corev1.NamespaceList) []map[string]interface{} {
+	if nsList == nil {
+		return nil
+	}
+
+	details := make([]map[string]interface{}, len(nsList.Items))
+	detailLocks := make([]sync.Mutex, len(nsList.Items))
+	semaphore := make(chan struct{}, clusterSummaryWorkloadConcurrency)
+	var wg sync.WaitGroup
+	runBounded := func(fn func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
+			fn()
+		}()
+	}
+
+	for i := range nsList.Items {
+		i := i
+		namespace := nsList.Items[i].Name
+		details[i] = map[string]interface{}{"namespace": namespace}
+
+		runBounded(func() {
+			deps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+			if err != nil || len(deps.Items) == 0 {
+				return
+			}
+			total := len(deps.Items)
+			healthy := 0
+			unhealthy := []string{}
+			for j := range deps.Items {
+				deployment := &deps.Items[j]
+				if deployment.Status.ReadyReplicas == *deployment.Spec.Replicas && deployment.Status.UnavailableReplicas == 0 {
+					healthy++
+				} else {
+					unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
+						deployment.Name, deployment.Status.ReadyReplicas, *deployment.Spec.Replicas))
+				}
+			}
+			deploymentInfo := map[string]interface{}{"total": total, "healthy": healthy}
+			if len(unhealthy) > 0 {
+				deploymentInfo["unhealthy"] = unhealthy
+			}
+			detailLocks[i].Lock()
+			details[i]["deployments"] = deploymentInfo
+			detailLocks[i].Unlock()
+		})
+
+		runBounded(func() {
+			statefulSets, err := c.clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
+			if err != nil || len(statefulSets.Items) == 0 {
+				return
+			}
+			total := len(statefulSets.Items)
+			healthy := 0
+			unhealthy := []string{}
+			for j := range statefulSets.Items {
+				statefulSet := &statefulSets.Items[j]
+				if statefulSet.Status.ReadyReplicas == *statefulSet.Spec.Replicas {
+					healthy++
+				} else {
+					unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
+						statefulSet.Name, statefulSet.Status.ReadyReplicas, *statefulSet.Spec.Replicas))
+				}
+			}
+			statefulSetInfo := map[string]interface{}{"total": total, "healthy": healthy}
+			if len(unhealthy) > 0 {
+				statefulSetInfo["unhealthy"] = unhealthy
+			}
+			detailLocks[i].Lock()
+			details[i]["statefulSets"] = statefulSetInfo
+			detailLocks[i].Unlock()
+		})
+
+		runBounded(func() {
+			daemonSets, err := c.clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
+			if err != nil || len(daemonSets.Items) == 0 {
+				return
+			}
+			total := len(daemonSets.Items)
+			healthy := 0
+			unhealthy := []string{}
+			for j := range daemonSets.Items {
+				daemonSet := &daemonSets.Items[j]
+				if daemonSet.Status.NumberReady == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.NumberUnavailable == 0 {
+					healthy++
+				} else {
+					unhealthy = append(unhealthy, fmt.Sprintf("%s (%d/%d ready)",
+						daemonSet.Name, daemonSet.Status.NumberReady, daemonSet.Status.DesiredNumberScheduled))
+				}
+			}
+			daemonSetInfo := map[string]interface{}{"total": total, "healthy": healthy}
+			if len(unhealthy) > 0 {
+				daemonSetInfo["unhealthy"] = unhealthy
+			}
+			detailLocks[i].Lock()
+			details[i]["daemonSets"] = daemonSetInfo
+			detailLocks[i].Unlock()
+		})
+
+		runBounded(func() {
+			jobs, err := c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
+			if err != nil || len(jobs.Items) == 0 {
+				return
+			}
+			total := len(jobs.Items)
+			failed := 0
+			active := 0
+			succeeded := 0
+			for j := range jobs.Items {
+				job := &jobs.Items[j]
+				if job.Status.Failed > 0 {
+					failed++
+				} else if job.Status.Active > 0 {
+					active++
+				} else if job.Status.Succeeded > 0 {
+					succeeded++
+				}
+			}
+			jobInfo := map[string]interface{}{
+				"total": total, "active": active, "succeeded": succeeded, "failed": failed,
+			}
+			detailLocks[i].Lock()
+			details[i]["jobs"] = jobInfo
+			detailLocks[i].Unlock()
+		})
+	}
+
+	wg.Wait()
+	return details
 }
