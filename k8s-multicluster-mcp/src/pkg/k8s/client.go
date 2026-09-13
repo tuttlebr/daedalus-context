@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,9 +45,8 @@ import (
 // discovery, and metrics clients.
 // It also caches API resource information for performance.
 const (
-	gvrCacheTTL                             = 5 * time.Minute
-	dynamicListPageLimit              int64 = 500
-	clusterSummaryWorkloadConcurrency       = 8
+	gvrCacheTTL                = 5 * time.Minute
+	dynamicListPageLimit int64 = 500
 )
 
 type Client struct {
@@ -847,35 +847,42 @@ func (c *Client) GetPodsLogs(ctx context.Context, namespace, containerName, podN
 	}
 
 	// If the pod has multiple containers, get logs from each container
-	var allLogs strings.Builder
+	logSections := make([]string, len(pod.Spec.Containers))
+	tasks := make([]func(), 0, len(pod.Spec.Containers))
 	for i := range pod.Spec.Containers {
-		container := &pod.Spec.Containers[i]
-		containerLogOptions := podLogOptions.DeepCopy()
-		containerLogOptions.Container = container.Name
+		i := i
+		containerName := pod.Spec.Containers[i].Name
+		tasks = append(tasks, func() {
+			containerLogOptions := podLogOptions.DeepCopy()
+			containerLogOptions.Container = containerName
 
-		req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, containerLogOptions)
-		logs, err := req.Stream(ctx)
-		if err != nil {
-			allLogs.WriteString(fmt.Sprintf("\n--- Error getting logs for container %s: %v ---\n", container.Name, err))
-			continue
-		}
+			req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, containerLogOptions)
+			logs, err := req.Stream(ctx)
+			if err != nil {
+				logSections[i] = fmt.Sprintf("\n--- Error getting logs for container %s: %v ---\n", containerName, err)
+				return
+			}
 
-		allLogs.WriteString(fmt.Sprintf("\n--- Logs for container %s ---\n", container.Name))
-		buf := new(bytes.Buffer)
-		_, err = io.Copy(buf, logs)
-		closeErr := logs.Close()
+			var section strings.Builder
+			section.WriteString(fmt.Sprintf("\n--- Logs for container %s ---\n", containerName))
+			buf := new(bytes.Buffer)
+			_, copyErr := io.Copy(buf, logs)
+			closeErr := logs.Close()
 
-		if err != nil {
-			allLogs.WriteString(fmt.Sprintf("Error reading logs: %v\n", err))
-		} else if closeErr != nil {
-			allLogs.WriteString(fmt.Sprintf("Warning: error closing log stream: %v\n", closeErr))
-			allLogs.WriteString(buf.String())
-		} else {
-			allLogs.WriteString(buf.String())
-		}
+			if copyErr != nil {
+				section.WriteString(fmt.Sprintf("Error reading logs: %v\n", copyErr))
+			} else if closeErr != nil {
+				section.WriteString(fmt.Sprintf("Warning: error closing log stream: %v\n", closeErr))
+				section.WriteString(buf.String())
+			} else {
+				section.WriteString(buf.String())
+			}
+			logSections[i] = section.String()
+		})
 	}
+	runBoundedTasks(defaultKubernetesLogConcurrency, tasks)
 
-	return allLogs.String(), nil
+	return strings.Join(logSections, ""), nil
 }
 
 // GetPodMetrics retrieves CPU and Memory metrics for a specific pod.
@@ -1077,10 +1084,24 @@ func (c *Client) GetResourceYAML(ctx context.Context, kind, name, namespace stri
 
 // GetResourceDiff compares resource states
 func (c *Client) GetResourceDiff(ctx context.Context, kind, name, namespace, compareWith string) (map[string]interface{}, error) {
-	// Get current resource
-	current, err := c.GetResource(ctx, kind, name, namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current resource: %w", err)
+	var (
+		current    map[string]interface{}
+		currentErr error
+		other      map[string]interface{}
+		otherErr   error
+	)
+
+	if strings.HasPrefix(compareWith, "resource:") {
+		otherName := strings.TrimPrefix(compareWith, "resource:")
+		runConcurrentTasks(
+			func() { current, currentErr = c.GetResource(ctx, kind, name, namespace) },
+			func() { other, otherErr = c.GetResource(ctx, kind, otherName, namespace) },
+		)
+	} else {
+		current, currentErr = c.GetResource(ctx, kind, name, namespace)
+	}
+	if currentErr != nil {
+		return nil, fmt.Errorf("failed to get current resource: %w", currentErr)
 	}
 
 	result := map[string]interface{}{
@@ -1094,11 +1115,8 @@ func (c *Client) GetResourceDiff(ctx context.Context, kind, name, namespace, com
 		// For now, return just the current state with a note
 		result["note"] = "Previous version comparison requires revision history (available for Deployments, StatefulSets, etc.)"
 	} else if strings.HasPrefix(compareWith, "resource:") {
-		// Compare with another resource
-		otherName := strings.TrimPrefix(compareWith, "resource:")
-		other, err := c.GetResource(ctx, kind, otherName, namespace)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get comparison resource: %w", err)
+		if otherErr != nil {
+			return nil, fmt.Errorf("failed to get comparison resource: %w", otherErr)
 		}
 		result["other"] = other
 		result["diff"] = generateSimpleDiff(current, other)
@@ -1130,7 +1148,13 @@ func (c *Client) GetNamespaceResources(ctx context.Context, namespace string, ty
 		}
 	}
 
-	// Iterate through resources
+	type namespaceResourceTarget struct {
+		kind string
+		gvr  schema.GroupVersionResource
+	}
+	targets := []namespaceResourceTarget{}
+
+	// Select resources in discovery order.
 	for _, resourceList := range resourceLists {
 		gv, err := schema.ParseGroupVersion(resourceList.GroupVersion)
 		if err != nil {
@@ -1159,36 +1183,47 @@ func (c *Client) GetNamespaceResources(ctx context.Context, namespace string, ty
 				continue
 			}
 
-			// List resources of this type
-			gvr := schema.GroupVersionResource{
-				Group:    gv.Group,
-				Version:  gv.Version,
-				Resource: resource.Name,
+			targets = append(targets, namespaceResourceTarget{
+				kind: resource.Kind,
+				gvr: schema.GroupVersionResource{
+					Group:    gv.Group,
+					Version:  gv.Version,
+					Resource: resource.Name,
+				},
+			})
+		}
+	}
+
+	resourceResults := make([][]map[string]interface{}, len(targets))
+	tasks := make([]func(), 0, len(targets))
+	for i := range targets {
+		i := i
+		tasks = append(tasks, func() {
+			target := targets[i]
+			list, listErr := listDynamicResources(ctx, c.dynamicClient.Resource(target.gvr).Namespace(namespace), metav1.ListOptions{})
+			if listErr != nil || len(list.Items) == 0 {
+				return
 			}
 
-			list, err := listDynamicResources(ctx, c.dynamicClient.Resource(gvr).Namespace(namespace), metav1.ListOptions{})
-			if err != nil {
-				continue // Skip resources we can't list
-			}
-
-			if len(list.Items) > 0 {
-				resources := make([]map[string]interface{}, 0, len(list.Items))
-				for _, item := range list.Items {
-					// Create a summary of each resource
-					summary := map[string]interface{}{
-						"name": item.GetName(),
-						"kind": resource.Kind,
-					}
-
-					// Add creation timestamp
-					if timestamp := item.GetCreationTimestamp(); !timestamp.IsZero() {
-						summary["created"] = timestamp.Time
-					}
-
-					resources = append(resources, summary)
+			resources := make([]map[string]interface{}, 0, len(list.Items))
+			for _, item := range list.Items {
+				summary := map[string]interface{}{
+					"name": item.GetName(),
+					"kind": target.kind,
 				}
-				resourcesMap[resource.Kind] = resources
+				if timestamp := item.GetCreationTimestamp(); !timestamp.IsZero() {
+					summary["created"] = timestamp.Time
+				}
+				resources = append(resources, summary)
 			}
+			resourceResults[i] = resources
+		})
+	}
+	runBoundedTasks(defaultKubernetesReadConcurrency, tasks)
+
+	for i, resources := range resourceResults {
+		if len(resources) > 0 {
+			resourcesMap[targets[i].kind] = resources
 		}
 	}
 
@@ -1213,53 +1248,59 @@ func (c *Client) GetResourceOwners(ctx context.Context, kind, name, namespace st
 		return nil, fmt.Errorf("failed to get resource: %w", err)
 	}
 
-	// Extract owner references
-	if metadata, ok := resource["metadata"].(map[string]interface{}); ok {
-		if ownerRefs, ok := metadata["ownerReferences"].([]interface{}); ok {
-			owners := make([]map[string]interface{}, 0)
+	metadata, ok := resource["metadata"].(map[string]interface{})
+	if !ok {
+		return result, nil
+	}
 
-			for _, ref := range ownerRefs {
-				if ownerRef, ok := ref.(map[string]interface{}); ok {
-					ownerInfo := map[string]interface{}{
-						"kind": ownerRef["kind"],
-						"name": ownerRef["name"],
-						"uid":  ownerRef["uid"],
-					}
-
-					// Try to get the owner resource
-					if ownerKind, ok := ownerRef["kind"].(string); ok {
-						if ownerName, ok := ownerRef["name"].(string); ok {
-							// Owner is always in the same namespace
-							ownerResource, err := c.GetResource(ctx, ownerKind, ownerName, namespace)
-							if err == nil {
-								ownerInfo["exists"] = true
-								if ownerMeta, ok := ownerResource["metadata"].(map[string]interface{}); ok {
-									ownerInfo["namespace"] = ownerMeta["namespace"]
-								}
-							} else {
-								ownerInfo["exists"] = false
-								ownerInfo["error"] = err.Error()
-							}
-						}
-					}
-
-					owners = append(owners, ownerInfo)
-				}
+	owners := []map[string]interface{}{}
+	tasks := []func(){}
+	if ownerRefs, ok := metadata["ownerReferences"].([]interface{}); ok {
+		for _, ref := range ownerRefs {
+			ownerRef, ok := ref.(map[string]interface{})
+			if !ok {
+				continue
 			}
-
-			result["owners"] = owners
-		}
-
-		// Get UID for finding children
-		if includeChildren {
-			if uid, ok := metadata["uid"].(string); ok {
-				// Find resources that have this resource as owner
-				children, err := c.findOwnedResources(ctx, uid, namespace)
-				if err == nil {
-					result["children"] = children
-				}
+			ownerInfo := map[string]interface{}{
+				"kind": ownerRef["kind"],
+				"name": ownerRef["name"],
+				"uid":  ownerRef["uid"],
 			}
+			owners = append(owners, ownerInfo)
+
+			ownerKind, kindOK := ownerRef["kind"].(string)
+			ownerName, nameOK := ownerRef["name"].(string)
+			if !kindOK || !nameOK {
+				continue
+			}
+			tasks = append(tasks, func() {
+				ownerResource, ownerErr := c.GetResource(ctx, ownerKind, ownerName, namespace)
+				if ownerErr != nil {
+					ownerInfo["exists"] = false
+					ownerInfo["error"] = ownerErr.Error()
+					return
+				}
+				ownerInfo["exists"] = true
+				if ownerMeta, ok := ownerResource["metadata"].(map[string]interface{}); ok {
+					ownerInfo["namespace"] = ownerMeta["namespace"]
+				}
+			})
 		}
+	}
+
+	var children []map[string]interface{}
+	var childrenErr error
+	if includeChildren {
+		if uid, ok := metadata["uid"].(string); ok {
+			tasks = append(tasks, func() {
+				children, childrenErr = c.findOwnedResources(ctx, uid, namespace)
+			})
+		}
+	}
+	runConcurrentTasks(tasks...)
+	result["owners"] = owners
+	if childrenErr == nil && children != nil {
+		result["children"] = children
 	}
 
 	return result, nil
@@ -1297,14 +1338,18 @@ func generateSimpleDiff(obj1, obj2 map[string]interface{}) map[string]interface{
 
 // Helper function to find resources owned by a specific UID
 func (c *Client) findOwnedResources(ctx context.Context, ownerUID, namespace string) ([]map[string]interface{}, error) {
-	children := []map[string]interface{}{}
-
 	// Get all resource types
 	resourceLists, err := c.discoveryClient.ServerPreferredResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, err
 	}
 
+	type ownedResourceTarget struct {
+		kind       string
+		gvr        schema.GroupVersionResource
+		namespaced bool
+	}
+	targets := []ownedResourceTarget{}
 	for _, resourceList := range resourceLists {
 		gv, err := schema.ParseGroupVersion(resourceList.GroupVersion)
 		if err != nil {
@@ -1323,41 +1368,61 @@ func (c *Client) findOwnedResources(ctx context.Context, ownerUID, namespace str
 				continue
 			}
 
-			gvr := schema.GroupVersionResource{
-				Group:    gv.Group,
-				Version:  gv.Version,
-				Resource: resource.Name,
+			if resource.Namespaced && namespace == "" {
+				continue
 			}
+			targets = append(targets, ownedResourceTarget{
+				kind: resource.Kind,
+				gvr: schema.GroupVersionResource{
+					Group:    gv.Group,
+					Version:  gv.Version,
+					Resource: resource.Name,
+				},
+				namespaced: resource.Namespaced,
+			})
+		}
+	}
 
-			var list *unstructured.UnstructuredList
-			if resource.Namespaced && namespace != "" {
-				list, err = listDynamicResources(ctx, c.dynamicClient.Resource(gvr).Namespace(namespace), metav1.ListOptions{})
-			} else if !resource.Namespaced {
-				list, err = listDynamicResources(ctx, c.dynamicClient.Resource(gvr), metav1.ListOptions{})
+	childResults := make([][]map[string]interface{}, len(targets))
+	tasks := make([]func(), 0, len(targets))
+	for i := range targets {
+		i := i
+		tasks = append(tasks, func() {
+			target := targets[i]
+			var (
+				list    *unstructured.UnstructuredList
+				listErr error
+			)
+			if target.namespaced {
+				list, listErr = listDynamicResources(ctx, c.dynamicClient.Resource(target.gvr).Namespace(namespace), metav1.ListOptions{})
 			} else {
-				continue
+				list, listErr = listDynamicResources(ctx, c.dynamicClient.Resource(target.gvr), metav1.ListOptions{})
+			}
+			if listErr != nil {
+				return
 			}
 
-			if err != nil {
-				continue
-			}
-
-			// Check each item for owner reference
+			matches := []map[string]interface{}{}
 			for _, item := range list.Items {
-				if ownerRefs := item.GetOwnerReferences(); len(ownerRefs) > 0 {
-					for _, ref := range ownerRefs {
-						if ref.UID == types.UID(ownerUID) {
-							children = append(children, map[string]interface{}{
-								"kind":      resource.Kind,
-								"name":      item.GetName(),
-								"namespace": item.GetNamespace(),
-							})
-							break
-						}
+				for _, ref := range item.GetOwnerReferences() {
+					if ref.UID == types.UID(ownerUID) {
+						matches = append(matches, map[string]interface{}{
+							"kind":      target.kind,
+							"name":      item.GetName(),
+							"namespace": item.GetNamespace(),
+						})
+						break
 					}
 				}
 			}
-		}
+			childResults[i] = matches
+		})
+	}
+	runBoundedTasks(defaultKubernetesReadConcurrency, tasks)
+
+	children := []map[string]interface{}{}
+	for _, matches := range childResults {
+		children = append(children, matches...)
 	}
 
 	return children, nil
@@ -1374,12 +1439,68 @@ func (c *Client) GetClusterHealth(ctx context.Context, includeMetrics, includeEv
 		"issues":       []string{},
 	}
 
-	// Check node health
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
+	controlPlaneLabels := []string{
+		"component=kube-apiserver",
+		"component=kube-controller-manager",
+		"component=kube-scheduler",
+		"component=etcd",
+	}
+	var (
+		nodes                  *corev1.NodeList
+		nodeErr                error
+		nodeMetrics            *v1beta1.NodeMetricsList
+		nodeMetricsErr         error
+		controlPlanePodLists   = make([]*corev1.PodList, len(controlPlaneLabels))
+		controlPlaneListErrors = make([]error, len(controlPlaneLabels))
+		allEvents              *corev1.EventList
+		eventErr               error
+		activePods             *corev1.PodList
+		activePodErr           error
+	)
+
+	tasks := []func(){func() {
+		nodes, nodeErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	}}
+	if includeMetrics {
+		tasks = append(tasks, func() {
+			nodeMetrics, nodeMetricsErr = c.metricsClientset.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+		})
+	}
+	for i, label := range controlPlaneLabels {
+		i, label := i, label
+		tasks = append(tasks, func() {
+			controlPlanePodLists[i], controlPlaneListErrors[i] = c.clientset.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+				LabelSelector: label,
+			})
+		})
+	}
+	if includeEvents {
+		tasks = append(tasks,
+			func() {
+				allEvents, eventErr = c.clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{
+					FieldSelector: "type!=Normal",
+				})
+			},
+			func() {
+				activePods, activePodErr = c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+			},
+		)
+	}
+	runConcurrentTasks(tasks...)
+
+	metricsMap := make(map[string]*v1beta1.NodeMetrics)
+	if nodeMetricsErr == nil && nodeMetrics != nil {
+		for i := range nodeMetrics.Items {
+			metrics := &nodeMetrics.Items[i]
+			metricsMap[metrics.Name] = metrics
+		}
+	}
+
+	// Check node health.
+	if nodeErr != nil {
 		result["healthy"] = false
 		if issuesList, ok := result["issues"].([]string); ok {
-			result["issues"] = append(issuesList, fmt.Sprintf("Failed to list nodes: %v", err))
+			result["issues"] = append(issuesList, fmt.Sprintf("Failed to list nodes: %v", nodeErr))
 		}
 	} else {
 		readyCount := 0
@@ -1418,9 +1539,16 @@ func (c *Client) GetClusterHealth(ctx context.Context, includeMetrics, includeEv
 
 			// Get node metrics if requested
 			if includeMetrics {
-				metrics, err := c.GetNodeMetrics(ctx, node.Name)
-				if err == nil {
-					nodeInfo["metrics"] = metrics
+				if metrics, ok := metricsMap[node.Name]; ok {
+					nodeInfo["metrics"] = map[string]interface{}{
+						"nodeName":  node.Name,
+						"timestamp": metrics.Timestamp.Time,
+						"window":    metrics.Window.Duration.String(),
+						"usage": map[string]string{
+							"cpu":    metrics.Usage.Cpu().String(),
+							"memory": metrics.Usage.Memory().String(),
+						},
+					}
 				}
 			}
 
@@ -1435,44 +1563,28 @@ func (c *Client) GetClusterHealth(ctx context.Context, includeMetrics, includeEv
 		}
 	}
 
-	// Check control plane components
-	controlPlaneNamespaces := []string{"kube-system"}
-	controlPlaneLabels := []string{
-		"component=kube-apiserver",
-		"component=kube-controller-manager",
-		"component=kube-scheduler",
-		"component=etcd",
-	}
-
 	cpComponents := []map[string]interface{}{}
+	for i, pods := range controlPlanePodLists {
+		if controlPlaneListErrors[i] != nil || pods == nil {
+			continue
+		}
+		for j := range pods.Items {
+			pod := &pods.Items[j]
+			component := map[string]interface{}{
+				"name":      pod.Name,
+				"namespace": pod.Namespace,
+				"ready":     true,
+				"phase":     string(pod.Status.Phase),
+			}
 
-	for _, ns := range controlPlaneNamespaces {
-		for _, label := range controlPlaneLabels {
-			pods, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-				LabelSelector: label,
-			})
-			if err == nil && len(pods.Items) > 0 {
-				for j := range pods.Items {
-					pod := &pods.Items[j]
-					component := map[string]interface{}{
-						"name":      pod.Name,
-						"namespace": pod.Namespace,
-						"ready":     true,
-						"phase":     string(pod.Status.Phase),
-					}
-
-					// Check if all containers are ready
-					for k := range pod.Status.ContainerStatuses {
-						if !pod.Status.ContainerStatuses[k].Ready {
-							component["ready"] = false
-							result["healthy"] = false
-							break
-						}
-					}
-
-					cpComponents = append(cpComponents, component)
+			for k := range pod.Status.ContainerStatuses {
+				if !pod.Status.ContainerStatuses[k].Ready {
+					component["ready"] = false
+					result["healthy"] = false
+					break
 				}
 			}
+			cpComponents = append(cpComponents, component)
 		}
 	}
 
@@ -1483,8 +1595,12 @@ func (c *Client) GetClusterHealth(ctx context.Context, includeMetrics, includeEv
 	// Get recent warning/error events if requested.
 	// Events are filtered to exclude stale references to pods from old
 	// ReplicaSet generations (e.g. after a rollout restart) and deduplicated.
-	if includeEvents {
-		recentEvents := c.filterRecentEvents(ctx, 30*time.Minute, 0)
+	if includeEvents && eventErr == nil {
+		activePodUIDs := map[types.UID]bool{}
+		if activePodErr == nil {
+			activePodUIDs = activePodUIDsFromList(activePods)
+		}
+		recentEvents := filterRecentEventList(allEvents, activePodUIDs, 30*time.Minute, 0)
 		if len(recentEvents) > 0 {
 			result["recentEvents"] = recentEvents
 		}
@@ -1826,15 +1942,26 @@ func (c *Client) GetTopNodes(ctx context.Context, sortBy string, includeConditio
 		sortBy = "cpu"
 	}
 
-	// Get node list and metrics
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %w", err)
+	var (
+		nodes           *corev1.NodeList
+		nodeErr         error
+		nodeMetricsList *v1beta1.NodeMetricsList
+		metricsErr      error
+		allPods         *corev1.PodList
+		podsErr         error
+	)
+	runConcurrentTasks(
+		func() { nodes, nodeErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{}) },
+		func() {
+			nodeMetricsList, metricsErr = c.metricsClientset.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+		},
+		func() { allPods, podsErr = c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{}) },
+	)
+	if nodeErr != nil {
+		return nil, fmt.Errorf("failed to list nodes: %w", nodeErr)
 	}
-
-	nodeMetricsList, err := c.metricsClientset.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node metrics: %w", err)
+	if metricsErr != nil {
+		return nil, fmt.Errorf("failed to get node metrics: %w", metricsErr)
 	}
 
 	// Create a map for quick metrics lookup
@@ -1842,6 +1969,12 @@ func (c *Client) GetTopNodes(ctx context.Context, sortBy string, includeConditio
 	for i := range nodeMetricsList.Items {
 		nm := &nodeMetricsList.Items[i]
 		metricsMap[nm.Name] = nm
+	}
+	podCountsByNode := make(map[string]int)
+	if podsErr == nil && allPods != nil {
+		for i := range allPods.Items {
+			podCountsByNode[allPods.Items[i].Spec.NodeName]++
+		}
 	}
 
 	// Process nodes
@@ -1897,13 +2030,9 @@ func (c *Client) GetTopNodes(ctx context.Context, sortBy string, includeConditio
 			}
 		}
 
-		// Get pod count
-		pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("spec.nodeName=%s", node.Name),
-		})
 		podCount := 0
-		if err == nil {
-			podCount = len(pods.Items)
+		if podsErr == nil {
+			podCount = podCountsByNode[node.Name]
 			nodeInfo["podCount"] = podCount
 			nodeInfo["podPercentage"] = fmt.Sprintf("%.1f%%", float64(podCount)/float64(podCapacity.Value())*100)
 		}
@@ -1972,10 +2101,23 @@ func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, in
 		"logs":       map[string]string{},
 	}
 
-	// Get the pod
-	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pod: %w", err)
+	fieldSelector := fmt.Sprintf("involvedObject.name=%s,involvedObject.namespace=%s", name, namespace)
+	var (
+		pod       *corev1.Pod
+		podErr    error
+		events    *corev1.EventList
+		eventsErr error
+	)
+	runConcurrentTasks(
+		func() { pod, podErr = c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{}) },
+		func() {
+			events, eventsErr = c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+				FieldSelector: fieldSelector,
+			})
+		},
+	)
+	if podErr != nil {
+		return nil, fmt.Errorf("failed to get pod: %w", podErr)
 	}
 
 	// Basic pod info
@@ -2033,11 +2175,7 @@ func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, in
 	result["containers"] = containersList
 
 	// Get events related to this pod
-	fieldSelector := fmt.Sprintf("involvedObject.name=%s,involvedObject.namespace=%s", name, namespace)
-	events, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fieldSelector,
-	})
-	if err == nil {
+	if eventsErr == nil {
 		eventsList := make([]map[string]interface{}, 0, len(events.Items))
 		for i := range events.Items {
 			event := &events.Items[i]
@@ -2056,19 +2194,32 @@ func (c *Client) GetPodDebugInfo(ctx context.Context, name, namespace string, in
 	if includeLogs {
 		result["logWindow"] = logWindowMetadata(observedAt, logLines, sinceSeconds)
 		logs := make(map[string]string)
+		logResults := make([]string, len(pod.Status.ContainerStatuses))
+		logOK := make([]bool, len(pod.Status.ContainerStatuses))
+		tasks := make([]func(), 0, len(pod.Status.ContainerStatuses))
 		for i := range pod.Status.ContainerStatuses {
-			cs := &pod.Status.ContainerStatuses[i]
-			logOptions := newPodLogOptions(cs.Name, logLines, sinceSeconds)
-
-			req := c.clientset.CoreV1().Pods(namespace).GetLogs(name, logOptions)
-			podLogs, err := req.Stream(ctx)
-			if err == nil {
+			i := i
+			containerName := pod.Status.ContainerStatuses[i].Name
+			tasks = append(tasks, func() {
+				logOptions := newPodLogOptions(containerName, logLines, sinceSeconds)
+				req := c.clientset.CoreV1().Pods(namespace).GetLogs(name, logOptions)
+				podLogs, logErr := req.Stream(ctx)
+				if logErr != nil {
+					return
+				}
 				buf := new(bytes.Buffer)
 				_, copyErr := io.Copy(buf, podLogs)
 				podLogs.Close()
 				if copyErr == nil {
-					logs[cs.Name] = buf.String()
+					logResults[i] = buf.String()
+					logOK[i] = true
 				}
+			})
+		}
+		runBoundedTasks(defaultKubernetesLogConcurrency, tasks)
+		for i := range pod.Status.ContainerStatuses {
+			if logOK[i] {
+				logs[pod.Status.ContainerStatuses[i].Name] = logResults[i]
 			}
 		}
 		result["logs"] = logs
@@ -2084,10 +2235,22 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 		"endpoints": []map[string]interface{}{},
 	}
 
-	// Get the service
-	service, err := c.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service: %w", err)
+	var (
+		service      *corev1.Service
+		serviceErr   error
+		endpoints    *corev1.Endpoints
+		endpointsErr error
+	)
+	runConcurrentTasks(
+		func() {
+			service, serviceErr = c.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+		},
+		func() {
+			endpoints, endpointsErr = c.clientset.CoreV1().Endpoints(namespace).Get(ctx, name, metav1.GetOptions{})
+		},
+	)
+	if serviceErr != nil {
+		return nil, fmt.Errorf("failed to get service: %w", serviceErr)
 	}
 
 	result["service"] = map[string]interface{}{
@@ -2099,14 +2262,13 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 		"selector":  service.Spec.Selector,
 	}
 
-	// Get endpoints
-	endpoints, err := c.clientset.CoreV1().Endpoints(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
+	if endpointsErr != nil {
 		return result, nil // Return service info even if no endpoints
 	}
 
 	// Process endpoint subsets
 	endpointsList := []map[string]interface{}{}
+	healthTasks := []func(){}
 	for _, subset := range endpoints.Subsets {
 		for _, addr := range subset.Addresses {
 			endpointInfo := map[string]interface{}{
@@ -2122,8 +2284,13 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 
 				// Check pod health if requested
 				if checkHealth && addr.TargetRef.Kind == "Pod" {
-					pod, err := c.clientset.CoreV1().Pods(addr.TargetRef.Namespace).Get(ctx, addr.TargetRef.Name, metav1.GetOptions{})
-					if err == nil {
+					targetNamespace := addr.TargetRef.Namespace
+					targetName := addr.TargetRef.Name
+					healthTasks = append(healthTasks, func() {
+						pod, podErr := c.clientset.CoreV1().Pods(targetNamespace).Get(ctx, targetName, metav1.GetOptions{})
+						if podErr != nil {
+							return
+						}
 						endpointInfo["podPhase"] = string(pod.Status.Phase)
 						endpointInfo["ready"] = true
 
@@ -2134,7 +2301,7 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 								break
 							}
 						}
-					}
+					})
 				}
 			}
 
@@ -2169,6 +2336,7 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 			endpointsList = append(endpointsList, endpointInfo)
 		}
 	}
+	runBoundedTasks(defaultKubernetesReadConcurrency, healthTasks)
 	result["endpoints"] = endpointsList
 
 	return result, nil
@@ -2176,20 +2344,35 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 
 // GetNetworkPolicies lists network policies affecting a namespace or pod
 func (c *Client) GetNetworkPolicies(ctx context.Context, namespace, podName string, includeDetails bool) (map[string]interface{}, error) {
-	// Get all network policies in the namespace
-	policies, err := c.clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list network policies: %w", err)
+	var (
+		policies    *networkingv1.NetworkPolicyList
+		policyErr   error
+		selectedPod *corev1.Pod
+		podErr      error
+	)
+	if podName == "" {
+		policies, policyErr = c.clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	} else {
+		runConcurrentTasks(
+			func() {
+				policies, policyErr = c.clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+			},
+			func() {
+				selectedPod, podErr = c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+			},
+		)
+	}
+	if policyErr != nil {
+		return nil, fmt.Errorf("failed to list network policies: %w", policyErr)
 	}
 
 	// If a specific pod is requested, get its labels
 	var podLabels map[string]string
 	if podName != "" {
-		pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get pod: %w", err)
+		if podErr != nil {
+			return nil, fmt.Errorf("failed to get pod: %w", podErr)
 		}
-		podLabels = pod.Labels
+		podLabels = selectedPod.Labels
 	}
 
 	policiesList := make([]map[string]interface{}, 0, len(policies.Items))
@@ -3038,49 +3221,36 @@ func (c *Client) GetClusterSummary(ctx context.Context, includeNamespaceDetails 
 
 	// These reads are independent. Namespace details are the exception: they
 	// fan out only after the namespace list is available.
-	var wg sync.WaitGroup
-	runAsync := func(fn func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fn()
-		}()
-	}
-
-	runAsync(func() {
+	tasks := []func(){func() {
 		version, versionErr := c.clientset.Discovery().ServerVersion()
 		if versionErr == nil {
 			serverVersion = version.GitVersion
 			serverPlatform = version.Platform
 			hasServerVersion = true
 		}
-	})
-	runAsync(func() {
+	}, func() {
 		nodes, nodeErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	})
-	runAsync(func() {
+	}, func() {
 		nsList, namespaceErr = c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 		if namespaceErr == nil && includeNamespaceDetails {
 			namespaceDetails = c.getClusterSummaryNamespaceDetails(ctx, nsList)
 		}
-	})
-	runAsync(func() {
+	}, func() {
 		pods, podErr = c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	})
-	runAsync(func() {
+	}, func() {
 		allEvents, eventErr = c.clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{
 			FieldSelector: "type!=Normal",
 		})
-	})
+	}}
 	for i, label := range cpLabels {
 		i, label := i, label
-		runAsync(func() {
+		tasks = append(tasks, func() {
 			controlPlanePodLists[i], controlPlaneListErrors[i] = c.clientset.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
 				LabelSelector: label,
 			})
 		})
 	}
-	wg.Wait()
+	runConcurrentTasks(tasks...)
 
 	if hasServerVersion {
 		summary["serverVersion"] = serverVersion
@@ -3210,28 +3380,14 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 
 	details := make([]map[string]interface{}, len(nsList.Items))
 	detailLocks := make([]sync.Mutex, len(nsList.Items))
-	semaphore := make(chan struct{}, clusterSummaryWorkloadConcurrency)
-	var wg sync.WaitGroup
-	runBounded := func(fn func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				return
-			}
-			fn()
-		}()
-	}
+	tasks := make([]func(), 0, len(nsList.Items)*4)
 
 	for i := range nsList.Items {
 		i := i
 		namespace := nsList.Items[i].Name
 		details[i] = map[string]interface{}{"namespace": namespace}
 
-		runBounded(func() {
+		tasks = append(tasks, func() {
 			deps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(deps.Items) == 0 {
 				return
@@ -3257,7 +3413,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Unlock()
 		})
 
-		runBounded(func() {
+		tasks = append(tasks, func() {
 			statefulSets, err := c.clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(statefulSets.Items) == 0 {
 				return
@@ -3283,7 +3439,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Unlock()
 		})
 
-		runBounded(func() {
+		tasks = append(tasks, func() {
 			daemonSets, err := c.clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(daemonSets.Items) == 0 {
 				return
@@ -3309,7 +3465,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Unlock()
 		})
 
-		runBounded(func() {
+		tasks = append(tasks, func() {
 			jobs, err := c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(jobs.Items) == 0 {
 				return
@@ -3337,6 +3493,6 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 		})
 	}
 
-	wg.Wait()
+	runBoundedTasks(defaultKubernetesReadConcurrency, tasks)
 	return details
 }

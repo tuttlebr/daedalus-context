@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // newTestClient builds a Client with a pre-populated GVR cache, simulating
@@ -266,7 +267,15 @@ func newClusterSummaryTestClient(t *testing.T, handler http.HandlerFunc) *Client
 	if err != nil {
 		t.Fatalf("create test clientset: %v", err)
 	}
-	return &Client{clientset: clientset}
+	metricsClient, err := metricsclientset.NewForConfig(&rest.Config{
+		Host:  server.URL,
+		QPS:   1000,
+		Burst: 1000,
+	})
+	if err != nil {
+		t.Fatalf("create test metrics clientset: %v", err)
+	}
+	return &Client{clientset: clientset, metricsClientset: metricsClient}
 }
 
 func writeClusterSummaryTestResponse(w http.ResponseWriter, path, namespaceItems string) {
@@ -285,6 +294,8 @@ func writeClusterSummaryTestResponse(w http.ResponseWriter, path, namespaceItems
 		kind = "NamespaceList"
 	case path == "/api/v1/events":
 		kind = "EventList"
+	case path == "/apis/metrics.k8s.io/v1beta1/nodes":
+		apiVersion, kind = "metrics.k8s.io/v1beta1", "NodeMetricsList"
 	case path == "/api/v1/pods" || strings.HasSuffix(path, "/pods"):
 		kind = "PodList"
 	case strings.HasSuffix(path, "/deployments"):
@@ -350,7 +361,7 @@ func TestGetClusterSummaryStartsIndependentReadsConcurrently(t *testing.T) {
 }
 
 func TestGetClusterSummaryBoundsNamespaceWorkloadConcurrency(t *testing.T) {
-	namespaceCount := clusterSummaryWorkloadConcurrency + 4
+	namespaceCount := defaultKubernetesReadConcurrency + 4
 	namespaceItems := make([]string, namespaceCount)
 	for i := range namespaceItems {
 		namespaceItems[i] = fmt.Sprintf(`{"metadata":{"name":"namespace-%d"}}`, i)
@@ -366,7 +377,7 @@ func TestGetClusterSummaryBoundsNamespaceWorkloadConcurrency(t *testing.T) {
 			return
 		}
 		if strings.Contains(r.URL.Path, "/namespaces/namespace-") {
-			if started.Add(1) == clusterSummaryWorkloadConcurrency {
+			if started.Add(1) == defaultKubernetesReadConcurrency {
 				signalOnce.Do(func() { close(limitReached) })
 			}
 			select {
@@ -388,9 +399,9 @@ func TestGetClusterSummaryBoundsNamespaceWorkloadConcurrency(t *testing.T) {
 
 	select {
 	case <-limitReached:
-		if got := started.Load(); got != clusterSummaryWorkloadConcurrency {
+		if got := started.Load(); got != defaultKubernetesReadConcurrency {
 			close(release)
-			t.Fatalf("started %d namespace workload reads while blocked, want %d", got, clusterSummaryWorkloadConcurrency)
+			t.Fatalf("started %d namespace workload reads while blocked, want %d", got, defaultKubernetesReadConcurrency)
 		}
 		close(release)
 	case <-ctx.Done():

@@ -96,10 +96,27 @@ var gpuErrorPatterns = []struct {
 func (c *Client) GetGPUClusterOverview(ctx context.Context, includeNonGPUNodes, includeEvents bool) (map[string]interface{}, error) {
 	result := map[string]interface{}{}
 
-	// 1. Get all nodes and check for GPU capacity/labels/taints
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %w", err)
+	var (
+		nodes      *corev1.NodeList
+		nodeErr    error
+		dpStatus   map[string]interface{}
+		opStatus   map[string]interface{}
+		allPods    *corev1.PodList
+		allPodsErr error
+		gpuEvents  []map[string]interface{}
+	)
+	tasks := []func(){
+		func() { nodes, nodeErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{}) },
+		func() { dpStatus = c.findNVIDIADevicePlugin(ctx) },
+		func() { opStatus = c.findGPUOperator(ctx) },
+		func() { allPods, allPodsErr = c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{}) },
+	}
+	if includeEvents {
+		tasks = append(tasks, func() { gpuEvents = c.getGPURelatedEvents(ctx) })
+	}
+	runConcurrentTasks(tasks...)
+	if nodeErr != nil {
+		return nil, fmt.Errorf("failed to list nodes: %w", nodeErr)
 	}
 
 	gpuNodes := []map[string]interface{}{}
@@ -188,16 +205,13 @@ func (c *Client) GetGPUClusterOverview(ctx context.Context, includeNonGPUNodes, 
 	}
 
 	// 2. Check NVIDIA device plugin daemonset
-	dpStatus := c.findNVIDIADevicePlugin(ctx)
 	result["devicePlugin"] = dpStatus
 
 	// 3. Check GPU operator
-	opStatus := c.findGPUOperator(ctx)
 	result["gpuOperator"] = opStatus
 
 	// 4. Find all NVIDIA-related pods across all namespaces
-	allPods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if allPodsErr == nil {
 		nvidiaPods := []map[string]interface{}{}
 		for i := range allPods.Items {
 			pod := &allPods.Items[i]
@@ -257,7 +271,6 @@ func (c *Client) GetGPUClusterOverview(ctx context.Context, includeNonGPUNodes, 
 
 	// 6. GPU-related events
 	if includeEvents {
-		gpuEvents := c.getGPURelatedEvents(ctx)
 		if len(gpuEvents) > 0 {
 			result["recentGPUEvents"] = gpuEvents
 		}
@@ -275,10 +288,25 @@ func (c *Client) DiagnoseGPUScheduling(ctx context.Context, podName, namespace s
 		"suggestions": []string{},
 	}
 
-	// Get the pod
-	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pod '%s' in namespace '%s': %w", podName, namespace, err)
+	var (
+		pod       *corev1.Pod
+		podErr    error
+		nodes     *corev1.NodeList
+		nodesErr  error
+		events    *corev1.EventList
+		eventsErr error
+	)
+	runConcurrentTasks(
+		func() { pod, podErr = c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{}) },
+		func() { nodes, nodesErr = c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{}) },
+		func() {
+			events, eventsErr = c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+				FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
+			})
+		},
+	)
+	if podErr != nil {
+		return nil, fmt.Errorf("failed to get pod '%s' in namespace '%s': %w", podName, namespace, podErr)
 	}
 
 	result["phase"] = string(pod.Status.Phase)
@@ -378,8 +406,7 @@ func (c *Client) DiagnoseGPUScheduling(ctx context.Context, podName, namespace s
 	}
 
 	// 6. Check GPU nodes for taint/label mismatches
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if nodesErr == nil {
 		gpuNodeAnalysis := []map[string]interface{}{}
 		for i := range nodes.Items {
 			node := &nodes.Items[i]
@@ -452,10 +479,7 @@ func (c *Client) DiagnoseGPUScheduling(ctx context.Context, podName, namespace s
 	}
 
 	// 7. Check for GPU-related events for this pod
-	events, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
-	})
-	if err == nil && len(events.Items) > 0 {
+	if eventsErr == nil && len(events.Items) > 0 {
 		podEvents := []map[string]interface{}{}
 		for i := range events.Items {
 			event := &events.Items[i]
@@ -501,10 +525,24 @@ func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace
 		"logWindow":      logWindowMetadata(observedAt, logLines, sinceSeconds),
 	}
 
+	var (
+		dpInfo        map[string]interface{}
+		opInfo        map[string]interface{}
+		crdInfo       map[string]interface{}
+		nodeGPUStatus []map[string]interface{}
+		opReady       map[string]interface{}
+	)
+	runConcurrentTasks(
+		func() { dpInfo = c.getDevicePluginHealth(ctx, devicePluginNamespace, logLines, sinceSeconds) },
+		func() { opInfo = c.getGPUOperatorDeploymentHealth(ctx, gpuOperatorNamespace, logLines, sinceSeconds) },
+		func() { crdInfo = c.checkGPUCRDs(ctx) },
+		func() { nodeGPUStatus = c.getPerNodeGPUStatus(ctx) },
+		func() { opReady = c.checkGPUOperatorReadyCondition(ctx, gpuOperatorNamespace) },
+	)
+
 	detectedIssues := []map[string]interface{}{}
 
 	// 1. Device plugin daemonset health
-	dpInfo := c.getDevicePluginHealth(ctx, devicePluginNamespace, logLines, sinceSeconds)
 	result["devicePlugin"] = dpInfo
 	if dpHealthy, ok := dpInfo["healthy"].(bool); ok && !dpHealthy {
 		result["healthy"] = false
@@ -514,7 +552,6 @@ func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace
 	}
 
 	// 2. GPU operator deployment health
-	opInfo := c.getGPUOperatorDeploymentHealth(ctx, gpuOperatorNamespace, logLines, sinceSeconds)
 	result["gpuOperator"] = opInfo
 	if opHealthy, ok := opInfo["healthy"].(bool); ok && !opHealthy {
 		result["healthy"] = false
@@ -524,15 +561,12 @@ func (c *Client) GetGPUOperatorHealth(ctx context.Context, devicePluginNamespace
 	}
 
 	// 3. Check GPU-related CRDs
-	crdInfo := c.checkGPUCRDs(ctx)
 	result["crds"] = crdInfo
 
 	// 4. Per-node GPU device status
-	nodeGPUStatus := c.getPerNodeGPUStatus(ctx)
 	result["nodeGPUStatus"] = nodeGPUStatus
 
 	// 5. GPU operator ready condition
-	opReady := c.checkGPUOperatorReadyCondition(ctx, gpuOperatorNamespace)
 	result["operatorReady"] = opReady
 
 	result["detectedIssues"] = detectedIssues
@@ -831,10 +865,12 @@ func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, lo
 	}
 
 	info["podCount"] = len(dpPods.Items)
-	podDetails := []map[string]interface{}{}
-	detectedIssues := []map[string]interface{}{}
+	podDetails := make([]map[string]interface{}, len(dpPods.Items))
+	issueResults := make([][]map[string]interface{}, len(dpPods.Items))
+	logTasks := make([]func(), 0, len(dpPods.Items))
 
 	for i := range dpPods.Items {
+		i := i
 		pod := &dpPods.Items[i]
 		detail := map[string]interface{}{
 			"name":     pod.Name,
@@ -860,34 +896,41 @@ func (c *Client) getDevicePluginHealth(ctx context.Context, namespace string, lo
 			}
 		}
 		detail["ready"] = ready
+		podDetails[i] = detail
 
-		// Get recent logs
-		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, newPodLogOptions("", logLines, sinceSeconds))
-		logStream, err := logReq.Stream(ctx)
-		if err == nil {
+		podName := pod.Name
+		logTasks = append(logTasks, func() {
+			logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, newPodLogOptions("", logLines, sinceSeconds))
+			logStream, logErr := logReq.Stream(ctx)
+			if logErr != nil {
+				return
+			}
 			buf := make([]byte, 64*1024)
 			n, _ := logStream.Read(buf)
 			logStream.Close()
-			if n > 0 {
-				logContent := string(buf[:n])
-				detail["recentLogs"] = logContent
+			if n == 0 {
+				return
+			}
+			logContent := string(buf[:n])
+			detail["recentLogs"] = logContent
 
-				// Scan for known error patterns
-				for _, pattern := range gpuErrorPatterns {
-					if strings.Contains(strings.ToLower(logContent), strings.ToLower(pattern.Pattern)) {
-						detectedIssues = append(detectedIssues, map[string]interface{}{
-							"source":      "devicePlugin",
-							"pod":         pod.Name,
-							"errorType":   pattern.ErrorType,
-							"pattern":     pattern.Pattern,
-							"remediation": pattern.Remediation,
-						})
-					}
+			for _, pattern := range gpuErrorPatterns {
+				if strings.Contains(strings.ToLower(logContent), strings.ToLower(pattern.Pattern)) {
+					issueResults[i] = append(issueResults[i], map[string]interface{}{
+						"source":      "devicePlugin",
+						"pod":         podName,
+						"errorType":   pattern.ErrorType,
+						"pattern":     pattern.Pattern,
+						"remediation": pattern.Remediation,
+					})
 				}
 			}
-		}
-
-		podDetails = append(podDetails, detail)
+		})
+	}
+	runBoundedTasks(defaultKubernetesLogConcurrency, logTasks)
+	detectedIssues := []map[string]interface{}{}
+	for _, issues := range issueResults {
+		detectedIssues = append(detectedIssues, issues...)
 	}
 
 	info["pods"] = podDetails
@@ -925,10 +968,12 @@ func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace s
 
 	info["installed"] = true
 	info["podCount"] = len(opPods.Items)
-	podDetails := []map[string]interface{}{}
-	detectedIssues := []map[string]interface{}{}
+	podDetails := make([]map[string]interface{}, len(opPods.Items))
+	issueResults := make([][]map[string]interface{}, len(opPods.Items))
+	logTasks := make([]func(), 0, len(opPods.Items))
 
 	for i := range opPods.Items {
+		i := i
 		pod := &opPods.Items[i]
 		detail := map[string]interface{}{
 			"name":  pod.Name,
@@ -947,34 +992,41 @@ func (c *Client) getGPUOperatorDeploymentHealth(ctx context.Context, namespace s
 			}
 		}
 		detail["ready"] = ready
+		podDetails[i] = detail
 
-		// Get recent logs
-		logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, newPodLogOptions("", logLines, sinceSeconds))
-		logStream, err := logReq.Stream(ctx)
-		if err == nil {
+		podName := pod.Name
+		logTasks = append(logTasks, func() {
+			logReq := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, newPodLogOptions("", logLines, sinceSeconds))
+			logStream, logErr := logReq.Stream(ctx)
+			if logErr != nil {
+				return
+			}
 			buf := make([]byte, 64*1024)
 			n, _ := logStream.Read(buf)
 			logStream.Close()
-			if n > 0 {
-				logContent := string(buf[:n])
-				detail["recentLogs"] = logContent
+			if n == 0 {
+				return
+			}
+			logContent := string(buf[:n])
+			detail["recentLogs"] = logContent
 
-				// Scan for known error patterns
-				for _, pattern := range gpuErrorPatterns {
-					if strings.Contains(strings.ToLower(logContent), strings.ToLower(pattern.Pattern)) {
-						detectedIssues = append(detectedIssues, map[string]interface{}{
-							"source":      "gpuOperator",
-							"pod":         pod.Name,
-							"errorType":   pattern.ErrorType,
-							"pattern":     pattern.Pattern,
-							"remediation": pattern.Remediation,
-						})
-					}
+			for _, pattern := range gpuErrorPatterns {
+				if strings.Contains(strings.ToLower(logContent), strings.ToLower(pattern.Pattern)) {
+					issueResults[i] = append(issueResults[i], map[string]interface{}{
+						"source":      "gpuOperator",
+						"pod":         podName,
+						"errorType":   pattern.ErrorType,
+						"pattern":     pattern.Pattern,
+						"remediation": pattern.Remediation,
+					})
 				}
 			}
-		}
-
-		podDetails = append(podDetails, detail)
+		})
+	}
+	runBoundedTasks(defaultKubernetesLogConcurrency, logTasks)
+	detectedIssues := []map[string]interface{}{}
+	for _, issues := range issueResults {
+		detectedIssues = append(detectedIssues, issues...)
 	}
 
 	info["pods"] = podDetails

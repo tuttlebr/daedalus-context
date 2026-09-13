@@ -142,6 +142,12 @@ milvus:
   minio:
     enabled: true
     existingSecret: milvus-minio-credentials
+    image:
+      # Docker Hub no longer serves this historical release. Quay retains the
+      # byte-identical multi-architecture manifest for the pinned MinIO build.
+      repository: quay.io/minio/minio
+      tag: RELEASE.2024-12-18T13-15-44Z
+      pullPolicy: IfNotPresent
     # Distributed MinIO members require identical server binaries. Mixed
     # amd64 and arm64 members have different checksums and cannot share a pool.
     accessKey: ""
