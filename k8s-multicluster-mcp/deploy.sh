@@ -167,14 +167,14 @@ EOF
 fi
 
 if ! is_true "${DRY_RUN}" && is_true "${BUILD_IMAGE}"; then
-  K8S_MCP_COMPOSE_IMAGE="${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0}" \
+  K8S_MCP_COMPOSE_IMAGE="${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.1}" \
     docker compose --project-directory "${WORKSPACE_DIR}" \
       --file "${WORKSPACE_DIR}/docker-compose.yaml" \
       build k8s-mcp-server-read-only
 fi
 
 if ! is_true "${DRY_RUN}" && is_true "${PUSH_IMAGE}"; then
-  K8S_MCP_COMPOSE_IMAGE="${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0}" \
+  K8S_MCP_COMPOSE_IMAGE="${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.1}" \
     docker compose --project-directory "${WORKSPACE_DIR}" \
       --file "${WORKSPACE_DIR}/docker-compose.yaml" \
       push k8s-mcp-server-read-only

@@ -46,8 +46,8 @@ components:
       runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
   k8s-mcp:
     source: helm/k8s-mcp-server
-    sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
-    image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0
+    sourceRevision: 087a2205eae0bac0bac8487960548c8998a55f9f
+    image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.1
   unifi-mcp:
     source: helm/unifi-network-mcp-server
     sourceRevision: 7bd3958d803eaa9fff6b56a21a50c77e0f3b17a3

@@ -5,7 +5,7 @@ services:
     build:
       context: ./k8s-multicluster-mcp/src
       dockerfile: Dockerfile
-    image: ${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.0}
+    image: ${K8S_MCP_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.1}
     environment:
       KUBECONFIG: /home/appuser/.kube/config
       SERVER_MODE: streamable-http
