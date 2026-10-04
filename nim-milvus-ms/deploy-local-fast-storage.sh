@@ -25,7 +25,7 @@ if [[ "${current_context}" != "${EXPECTED_CONTEXT}" ]]; then
   exit 1
 fi
 
-for node_name in daedalus-02 daedalus-03 daedalus-04 daedalus-06; do
+for node_name in daedalus-02 daedalus-03 daedalus-01 daedalus-06; do
   kubectl get node "${node_name}" >/dev/null
 done
 

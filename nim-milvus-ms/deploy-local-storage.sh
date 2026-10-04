@@ -18,7 +18,7 @@ for command_name in helm kubectl; do
   fi
 done
 
-for node_name in daedalus-02 daedalus-03 daedalus-04; do
+for node_name in daedalus-02 daedalus-03 daedalus-01; do
   kubectl get node "${node_name}" >/dev/null
 done
 

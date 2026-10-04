@@ -2,7 +2,7 @@
 #
 # This class is intentionally:
 # - non-default, so unrelated workloads continue to use nfs-client;
-# - limited to the three nodes with the most local free space;
+# - limited to the three selected local-storage nodes;
 # - Retain, so deleting a PVC does not remove its underlying etcd data; and
 # - local-volume based, so Kubernetes records the volume's node affinity.
 #
@@ -25,7 +25,7 @@ storageClass:
           values:
             - daedalus-02
             - daedalus-03
-            - daedalus-04
+            - daedalus-01
 
 nodePathMap:
   - node: DEFAULT_PATH_FOR_NON_LISTED_NODES
@@ -36,7 +36,7 @@ nodePathMap:
   - node: daedalus-03
     paths:
       - /var/lib/daedalus-local-path/etcd
-  - node: daedalus-04
+  - node: daedalus-01
     paths:
       - /var/lib/daedalus-local-path/etcd
 

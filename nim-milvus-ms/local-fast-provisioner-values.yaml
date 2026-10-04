@@ -19,7 +19,7 @@ storageClass:
           values:
             - daedalus-02
             - daedalus-03
-            - daedalus-04
+            - daedalus-01
             - daedalus-06
 
 nodePathMap:
@@ -31,7 +31,7 @@ nodePathMap:
   - node: daedalus-03
     paths:
       - /var/lib/daedalus-local-path/fast
-  - node: daedalus-04
+  - node: daedalus-01
     paths:
       - /var/lib/daedalus-local-path/fast
   - node: daedalus-06

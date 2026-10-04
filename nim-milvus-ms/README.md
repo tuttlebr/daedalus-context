@@ -36,6 +36,8 @@ This repository does not contain application code. The active operational surfac
 | `custom-values.yaml` | Active Helm values overlay. |
 | `nodeport-values.yaml` | Optional stable NodePort overlay. |
 | `monitoring-values.yaml` | Optional ServiceMonitor overlay for Prometheus Operator clusters. |
+| `kube-prometheus-stack-values.yaml` | Global monitoring release reconciliation; preserves the active Prometheus volume and Service route. |
+| `deploy-monitoring.sh` | Guarded reconciliation of the existing kube-prometheus-stack Helm release. |
 | `pvc-label-post-renderer.sh` | Adds release/component lifecycle labels to etcd and MinIO PVC templates. |
 | `default-values.yaml` | Reference snapshot from upstream chart `5.0.14`. Not applied by deploy. |
 
@@ -207,7 +209,7 @@ kubectl get storageclass local-etcd
 
 The class is non-default, uses `WaitForFirstConsumer`, retains PVs after PVC
 deletion, and provisions only on `daedalus-02`, `daedalus-03`, and
-`daedalus-04` under `/var/lib/daedalus-local-path/etcd`. The etcd StatefulSet
+`daedalus-01` under `/var/lib/daedalus-local-path/etcd`. The etcd StatefulSet
 uses hard pod anti-affinity so its three local claims land on three distinct
 nodes.
 
@@ -221,6 +223,31 @@ Installing the StorageClass does not change existing PVCs or restart Milvus.
 An existing bound PVC's StorageClass cannot be changed in place. Moving the
 current etcd cluster requires a coordinated snapshot, new local PVCs, restore,
 and authenticated Milvus validation; do not copy a live etcd data directory.
+
+## Monitoring Helm Reconciliation
+
+The existing `monitoring/kube-prometheus-stack` release uses chart version
+`82.18.0`. Its active `kube-prometheus-maintenance` Prometheus resource and
+existing Service are persisted through the chart's `extraManifests` value.
+The native chart-created Prometheus remains at zero replicas. Both resources
+omit hostname selectors. New `local-fast` volumes can provision on
+`daedalus-01`, `daedalus-02`, `daedalus-03`, or `daedalus-06`; an existing local
+volume stays tied to its original node.
+
+To reconcile the existing release while preserving its other user settings:
+
+```bash
+EXPECTED_CONTEXT=kubernetes-admin@kubernetes bash deploy-monitoring.sh
+```
+
+The helper requires Helm, kubectl, Python 3, and PyYAML. It captures current
+user values in a private temporary file, combines them with
+`kube-prometheus-stack-values.yaml`, and removes the temporary file on exit.
+It handles live resource adoption and waits for the active StatefulSet to be
+Ready without a hostname selector. Edit the active Prometheus object under
+`extraManifests` for changes to its scrape, storage, or retention settings;
+`prometheus.prometheusSpec` controls the inactive chart-created resource.
+The Service UID, ClusterIP, NodePorts, and Grafana Service DNS are preserved.
 
 ## Optional NodePort Exposure
 
