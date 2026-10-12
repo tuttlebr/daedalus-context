@@ -10,6 +10,8 @@ import (
 func GetAPIResourcesTool() mcp.Tool {
 	return mcp.NewTool(
 		"getAPIResources",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("Discover all available API resource types (kinds) in the Kubernetes cluster. "+
 			"Returns resource names, short names, API group, whether they are namespaced, and supported verbs. "+
 			"Results are sorted, filterable, and bounded by default to keep discovery responses compact. "+
@@ -34,6 +36,8 @@ func GetAPIResourcesTool() mcp.Tool {
 func ListResourcesTool() mcp.Tool {
 	return mcp.NewTool(
 		"listResources",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("List Kubernetes resources of a specific type. Returns compact resource names, namespaces, and common status fields by default. "+
 			"Use lowercase plural resource names (e.g. \"deployments\" not \"Deployment\"). "+
 			"Omit namespace to search across all namespaces. "+
@@ -71,6 +75,8 @@ func ListResourcesTool() mcp.Tool {
 func GetResourcesTool() mcp.Tool {
 	return mcp.NewTool(
 		"getResource",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("Get the full JSON representation of a single Kubernetes resource by kind and name. "+
 			"Returns the complete resource spec, status, metadata, and labels. "+
 			"Use lowercase plural for kind. For a human-friendly summary, use describeResource instead. "+
@@ -111,6 +117,8 @@ func DescribeResourcesTool() mcp.Tool {
 func GetPodsLogsTools() mcp.Tool {
 	return mcp.NewTool(
 		"getPodsLogs",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("Retrieve stdout/stderr logs from a specific pod. "+
 			"Returns only logs from an explicit recent time window and prefixes every log line with its Kubernetes timestamp. "+
 			"If the pod has multiple containers, specify containerName "+
@@ -166,6 +174,8 @@ func GetPodMetricsTool() mcp.Tool {
 func GetEventsTool() mcp.Tool {
 	return mcp.NewTool(
 		"getEvents",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("List Kubernetes events, which record state changes and errors for resources. "+
 			"Events include information about scheduling, pulling images, container crashes, OOM kills, and more. "+
 			"Useful for troubleshooting pods that won't start or resources that are failing. "+
@@ -339,6 +349,8 @@ func GetNamespaceResourcesTool() mcp.Tool {
 func GetResourceOwnersTool() mcp.Tool {
 	return mcp.NewTool(
 		"getResourceOwners",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("Trace the ownership chain of a Kubernetes resource up through its owners. "+
 			"For example, Pod -> ReplicaSet -> Deployment. "+
 			"Helps understand resource dependencies and which controller manages a given resource. "+
@@ -669,6 +681,8 @@ func ScaleResourceTool() mcp.Tool {
 func ListContextsTool() mcp.Tool {
 	return mcp.NewTool(
 		"listContexts",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("List all available kubeconfig contexts and identify which one is currently active. "+
 			"Each context represents a different cluster/user/namespace combination. "+
 			"Use this to discover available clusters before switching with switchContext."),
@@ -679,6 +693,8 @@ func ListContextsTool() mcp.Tool {
 func GetClusterSummaryTool() mcp.Tool {
 	return mcp.NewTool(
 		"getClusterSummary",
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithDescription("Get a concise, high-level summary of the entire Kubernetes cluster's current status in a single call. "+
 			"Returns the active context, server version, node health, namespace listing, workload health per namespace "+
 			"(deployments, statefulsets, daemonsets, jobs), pod phase counts, control plane status, and recent warning events. "+
