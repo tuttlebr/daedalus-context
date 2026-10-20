@@ -95,6 +95,14 @@
         "replicaCount": { "type": "integer", "minimum": 1 },
         "model": { "type": "string", "minLength": 1 },
         "servedModelName": { "type": "string", "minLength": 1 },
+        "servedModelAliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "image": { "$ref": "#/properties/image" },
+        "rankingBackend": { "type": "string", "enum": ["rerank", "classify"] },
+        "rankingConcurrency": { "type": "integer", "minimum": 1, "maximum": 4 },
         "revision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
         "configSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },

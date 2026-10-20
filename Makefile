@@ -38,6 +38,9 @@ K8S_MCP_NODE_PORT ?= 30800
 UNIFI_MCP_NODE_PORT ?= 30081
 MCP_EXTERNAL_CLIENT_CIDR ?= 192.168.1.0/24
 MCP_EXTERNAL_ENABLED ?= false
+UNIFI_CONTROLLER_CA_FILE ?=
+UNIFI_CONTROLLER_HOSTNAME ?=
+UNIFI_CONTROLLER_IP ?=
 URL_INGEST_SUSPEND ?= true
 
 MILVUS_RELEASE ?= milvus
@@ -72,10 +75,10 @@ NV_INGEST_VERSION ?= 26.3.0
 RETRIEVER_EMBEDDING_SERVICE ?= $(RETRIEVER_FULLNAME)-embedder
 RETRIEVER_RERANKER_SERVICE ?= $(RETRIEVER_FULLNAME)-reranker
 override EMBEDDING_NIM_ENDPOINT := http://$(RETRIEVER_EMBEDDING_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/v1
-EMBEDDING_NIM_MODEL_NAME ?= nvidia/llama-nemotron-embed-vl-1b-v2
+EMBEDDING_NIM_MODEL_NAME ?= nvidia/Nemotron-3.5-Embed-1B-NVFP4
 override DAEDALUS_RERANKER_ENDPOINT := http://$(RETRIEVER_RERANKER_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/rerank
 override NIM_RERANKER_ENDPOINT := http://$(RETRIEVER_RERANKER_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:8000/v1/ranking
-RERANKER_MODEL_NAME ?= nvidia/llama-nemotron-rerank-1b-v2
+RERANKER_MODEL_NAME ?= nvidia/Nemotron-3.5-Rerank-8B-BF16
 
 override MILVUS_ENDPOINT := http://$(MILVUS_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:19530
 override MINIO_ENDPOINT := http://$(MINIO_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:9000
@@ -140,6 +143,16 @@ CONSUMER_RETRIES ?= 2
 
 SUPPORTED_COMPONENTS := hindsight milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
 COMPONENTS ?= $(SUPPORTED_COMPONENTS)
+RELEASE_hindsight := $(HINDSIGHT_RELEASE)
+RELEASE_milvus := $(MILVUS_RELEASE)
+RELEASE_retriever := $(RETRIEVER_RELEASE)
+RELEASE_nv-ingest := $(NV_INGEST_RELEASE)
+RELEASE_pdf-server := pdf-server
+RELEASE_k8s-mcp := k8s-mcp-server
+RELEASE_unifi-mcp := unifi-network-mcp-server
+# URL ingestion has CronJobs, not long-running workloads to restart.
+RECOVERY_RELEASE_ARGS = $(foreach component,$(filter-out url-ingest,$(COMPONENTS)),--release $(RELEASE_$(component)))
+
 UNKNOWN_COMPONENTS := $(filter-out $(SUPPORTED_COMPONENTS),$(COMPONENTS))
 
 ifneq ($(strip $(UNKNOWN_COMPONENTS)),)
@@ -149,7 +162,7 @@ endif
 .PHONY: help doctor show-config require-context \
 	images-validate images-build images-push images-release-refs images-publish \
 	compose-config compose-build compose-push compose-release-refs compose-publish \
-	preflight validate validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy \
+	preflight validate validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy restart recovery-status recovery-status-workflow \
 	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
@@ -165,7 +178,7 @@ endif
 	healthcheck-hindsight healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server healthcheck-url-ingest \
 	healthcheck-k8s-mcp healthcheck-unifi-mcp
 
-CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update redeploy \
+CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update redeploy recovery-status-workflow \
 	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	health-provider health-dependencies health-integration health-stack healthcheck healthcheck-agent \
 	publish-corpus stage-data seed-data run-ingest \
@@ -183,6 +196,24 @@ CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update re
 	healthcheck-url-ingest healthcheck-k8s-mcp healthcheck-unifi-mcp
 
 $(CLUSTER_TARGETS): | require-context
+
+.PHONY: refresh-run refresh-status refresh-verify
+refresh-run refresh-status refresh-verify: | require-context
+REFRESH_LIMIT ?= 0
+MILVUS_DATABASE ?= default
+refresh-run: ## [data write] Resume daily refresh; COLLECTIONS selects corpora, REFRESH_LIMIT bounds a smoke test.
+	@for collection in $(COLLECTIONS); do \
+	  DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
+	  python3 "$(ROOT_DIR)/scripts/refresh_job.py" --collection "$$collection" --limit "$(REFRESH_LIMIT)"; \
+	done
+
+refresh-status: ## [read-only cluster] Read persistent collection refresh status and freshness.
+	@$(KUBECTL) -n "$(DAEDALUS_NAMESPACE)" exec deployment/url-ingest-monitor -- \
+	  python3 -c 'import json,urllib.request; print(json.dumps(json.load(urllib.request.urlopen("http://localhost:8080/status")),indent=2))'
+
+refresh-verify: ## [cluster write, data read-only] Run a Job checking the active model and all five collections.
+	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
+	  python3 "$(ROOT_DIR)/scripts/refresh_job.py" --collection kubernetes --verify
 
 ##@ Getting started
 
@@ -403,6 +434,25 @@ enable-external-mcp: preflight ## [cluster write] Enable authenticated MCP NodeP
 update: preflight ## [cluster write] Reconcile selected already-published release images.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action update --components $(COMPONENTS)
 
+# Public convenience targets load the same root configuration as deploy.
+define load_env_and_run
+	@[[ -f "$(ENV_FILE)" ]] || { echo "Missing $(ENV_FILE)." >&2; exit 1; }
+	@bash -n "$(ENV_FILE)"
+	@set -a; source "$(ENV_FILE)"; set +a; $(MAKE) --no-print-directory $(1)
+endef
+
+restart: ## [cluster write] Load .env and restart all selected services using existing storage.
+	$(call load_env_and_run,redeploy)
+
+recovery-status: ## [read-only cluster] Load .env and report restart and storage recovery blockers.
+	$(call load_env_and_run,recovery-status-workflow)
+
+recovery-status-workflow: preflight
+	@if [[ -n "$(strip $(RECOVERY_RELEASE_ARGS))" ]]; then \
+	  KUBECTL="$(KUBECTL)" python3 "$(ROOT_DIR)/scripts/workload_recovery.py" status \
+	    --context "$(EXPECTED_CONTEXT)" --namespace "$(DAEDALUS_NAMESPACE)" $(RECOVERY_RELEASE_ARGS); \
+	else echo 'URL ingestion has no long-running workloads; use make health-provider COMPONENTS=url-ingest.'; fi
+
 redeploy: preflight ## [cluster write] Restart selected workloads without deleting durable data.
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action redeploy --components $(COMPONENTS)
 
@@ -447,10 +497,9 @@ deploy-retriever:
 	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" \
 	  "$${values_args[@]}" --atomic --wait --history-max 10 \
 	  --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
-	for deployment in "$(RETRIEVER_FULLNAME)-embedder" "$(RETRIEVER_FULLNAME)-reranker"; do \
-	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status "deployment/$$deployment" \
-	    --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
-	done; \
+	$(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status deployment \
+	  --selector="app.kubernetes.io/instance=$(RETRIEVER_RELEASE)" \
+	  --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
 	if $(KUBECTL) api-resources --api-group=cilium.io --output=name 2>/dev/null \
 	    | grep -Fxq 'ciliumnetworkpolicies.cilium.io'; then \
 	  mapfile -t cilium_policies < <($(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" \
@@ -467,6 +516,7 @@ deploy-milvus:
 	@[[ -n "$(MINIO_STORAGE_CLASS)" ]] || { echo 'MINIO_STORAGE_CLASS is required.' >&2; exit 1; }
 	@$(HELM) upgrade --install "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
+	  --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" \
 	  --set-string milvus.minio.persistence.storageClass="$(MINIO_STORAGE_CLASS)" \
 	  --set-string milvus.etcd.persistence.storageClass="$(ETCD_STORAGE_CLASS)" \
 	  --set milvus.metrics.serviceMonitor.enabled="$(ENABLE_MILVUS_MONITORING)" \
@@ -522,12 +572,16 @@ deploy-pdf-server:
 	    --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
 
 deploy-url-ingest:
+	@python3 "$(ROOT_DIR)/scripts/render_refresh_contract.py" --output "$(URL_INGEST_CHART)/files/refresh-contract.json"
+	@cp "$(ROOT_DIR)/url-ingest/refresh_monitor.py" "$(URL_INGEST_CHART)/files/refresh_monitor.py"
 	@$(HELM) upgrade --install url-ingest "$(URL_INGEST_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	  --set-string images.crawler="$(URL_INGEST_IMAGE)" \
 	  --set-string images.runner="$(URL_INGEST_RUNNER_IMAGE)" \
 	  --set schedules.suspend="$(URL_INGEST_SUSPEND)" \
 	  --set ingestion.globalCapacity="$(URL_INGEST_GLOBAL_CAPACITY)" \
+	  --set-string endpoints.embedding="$(EMBEDDING_NIM_ENDPOINT)" \
+	  --set monitoring.enabled=true \
 	  --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
 	  --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" \
 	  --atomic --wait --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"
@@ -555,6 +609,15 @@ deploy-k8s-mcp:
 
 deploy-unifi-mcp:
 	@image='$(UNIFI_MCP_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; external_args=(); helm_args=(); \
+	  if [[ -n "$(UNIFI_CONTROLLER_CA_FILE)" ]]; then \
+	    helm_args+=(--set-file "controller.caBundle=$(UNIFI_CONTROLLER_CA_FILE)"); \
+	  fi; \
+	  if [[ -n "$(UNIFI_CONTROLLER_HOSTNAME)$(UNIFI_CONTROLLER_IP)" ]]; then \
+	    [[ -n "$(UNIFI_CONTROLLER_HOSTNAME)" && -n "$(UNIFI_CONTROLLER_IP)" ]] || \
+	      { echo "UNIFI_CONTROLLER_HOSTNAME and UNIFI_CONTROLLER_IP must be set together" >&2; exit 1; }; \
+	    helm_args+=(--set-string 'controller.hostAliases[0].ip=$(UNIFI_CONTROLLER_IP)' \
+	      --set-string 'controller.hostAliases[0].hostnames[0]=$(UNIFI_CONTROLLER_HOSTNAME)'); \
+	  fi; \
 	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
 	    external_args+=(--set-string 'service.external.sourceRanges[0]=$(MCP_EXTERNAL_CLIENT_CIDR)'); \
 	  else \
@@ -594,52 +657,35 @@ update-unifi-mcp: deploy-unifi-mcp
 
 # Restarts -------------------------------------------------------------------
 
-redeploy-hindsight: deploy-hindsight
+define restart_release
+	@KUBECTL="$(KUBECTL)" python3 "$(ROOT_DIR)/scripts/workload_recovery.py" restart \
+	  --context "$(EXPECTED_CONTEXT)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	  --release "$(1)" --timeout "$(2)"
+endef
+
+redeploy-hindsight:
+	$(call restart_release,$(HINDSIGHT_RELEASE),$(ROLLOUT_TIMEOUT))
 
 redeploy-milvus:
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout restart statefulset --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)"
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status statefulset --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout restart statefulset --selector="release=$(MILVUS_RELEASE)"
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status statefulset --selector="release=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout restart deployment --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)"
-	@$(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" rollout status deployment --selector="app.kubernetes.io/instance=$(MILVUS_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
+	$(call restart_release,$(MILVUS_RELEASE),$(ROLLOUT_TIMEOUT))
 
 redeploy-retriever:
-	@for deployment in "$(RETRIEVER_FULLNAME)-embedder" "$(RETRIEVER_FULLNAME)-reranker"; do \
-	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" get deployment "$$deployment" >/dev/null; \
-	  before="$$($(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" get deployment "$$deployment" \
-	    -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')"; \
-	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout restart "deployment/$$deployment"; \
-	  $(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status "deployment/$$deployment" \
-	    --timeout="$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
-	  after="$$($(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" get deployment "$$deployment" \
-	    -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')"; \
-	  [[ -n "$$after" && "$$after" != "$$before" ]] || { \
-	    echo "Restart annotation did not change for deployment/$$deployment." >&2; exit 1; \
-	  }; \
-	done
+	$(call restart_release,$(RETRIEVER_RELEASE),$(RETRIEVER_ROLLOUT_TIMEOUT))
 
 redeploy-nv-ingest:
-	@$(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" rollout restart statefulset --selector="app.kubernetes.io/instance=$(NV_INGEST_RELEASE)"
-	@$(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" rollout status statefulset --selector="app.kubernetes.io/instance=$(NV_INGEST_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
-	@$(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" rollout restart deployment --selector="app.kubernetes.io/instance=$(NV_INGEST_RELEASE)"
-	@$(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" rollout status deployment --selector="app.kubernetes.io/instance=$(NV_INGEST_RELEASE)" --timeout="$(ROLLOUT_TIMEOUT)"
+	$(call restart_release,$(NV_INGEST_RELEASE),$(ROLLOUT_TIMEOUT))
 
 redeploy-pdf-server:
-	@$(KUBECTL) --namespace="$(PDF_SERVER_NAMESPACE)" rollout restart deployment/pdf-server
-	@$(KUBECTL) --namespace="$(PDF_SERVER_NAMESPACE)" rollout status deployment/pdf-server --timeout="$(ROLLOUT_TIMEOUT)"
+	$(call restart_release,pdf-server,$(ROLLOUT_TIMEOUT))
 
 redeploy-url-ingest:
-	@echo "CronJobs have no persistent pods; reconciling their job templates instead."
-	@$(MAKE) --no-print-directory deploy-url-ingest
+	@echo "CronJobs have no persistent pods; existing schedules and Jobs are unchanged. Use make update COMPONENTS=url-ingest to reconcile templates."
 
 redeploy-k8s-mcp:
-	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" rollout restart deployment/k8s-mcp-server
-	@$(KUBECTL) --namespace="$(K8S_MCP_NAMESPACE)" rollout status deployment/k8s-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
+	$(call restart_release,k8s-mcp-server,$(ROLLOUT_TIMEOUT))
 
 redeploy-unifi-mcp:
-	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" rollout restart deployment/unifi-network-mcp-server
-	@$(KUBECTL) --namespace="$(UNIFI_MCP_NAMESPACE)" rollout status deployment/unifi-network-mcp-server --timeout="$(ROLLOUT_TIMEOUT)"
+	$(call restart_release,unifi-network-mcp-server,$(ROLLOUT_TIMEOUT))
 
 # Health checks --------------------------------------------------------------
 
@@ -730,6 +776,7 @@ define report_milvus_collections
 	[[ -n "$$proxy_pod" ]] || { echo "No running Milvus proxy pod found." >&2; exit 1; }; \
 	milvus_api() { \
 	  local path="$$1" body="$$2"; \
+	  body="$$($(JQ) -c --arg dbName "$(MILVUS_DATABASE)" '. + {dbName: $$dbName}' <<<"$$body")"; \
 	  $(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" get secret "$(MILVUS_ROOT_SECRET_NAME)" \
 	    -o jsonpath='{.data.password}' | base64 --decode | \
 	    $(KUBECTL) --namespace="$(MILVUS_NAMESPACE)" exec -i "$$proxy_pod" -- \
@@ -978,13 +1025,12 @@ define run_ingest_operation
 endef
 
 stage-data: publish-corpus ## [data write] Publish PDFs and stage URL inputs without ingesting them.
-	$(call run_ingest_operation,--stage-data)
+	@echo 'PDF corpus published. URL sources are fetched conditionally by refresh-run.'
 
 seed-data: publish-corpus ## [data write] Publish, stage, ingest, wait, and verify collections.
-	$(call run_ingest_operation,--stage-data --run-now $(COLLECTIONS))
+	@$(MAKE) --no-print-directory refresh-run COLLECTIONS="$(COLLECTIONS)"
 
-run-ingest: preflight ## [data write] Ingest staged data, wait, and verify selected collections.
-	$(call run_ingest_operation,--run-now $(COLLECTIONS))
+run-ingest: refresh-run ## [data write] Resume the contract-based refresh for selected collections.
 
 ##@ Validation and integration
 
@@ -1000,13 +1046,15 @@ validate-helm: ## [read-only local] Validate topology contracts and all eight He
 	  -s "$(ROOT_DIR)/scripts/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(RETRIEVER_CHART)/tests" >/dev/null
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+	  -s "$(ROOT_DIR)/url-ingest/tests" -p test_refresh.py >/dev/null
 	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null
 	@for chart in "$(MILVUS_CHART)" "$(RETRIEVER_CHART)" "$(NV_INGEST_CHART)" \
 	  "$(PDF_SERVER_CHART)" "$(URL_INGEST_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
 	  $(HELM) lint "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null; \
 	done
 	@rendered="$$(mktemp)"; trap 'rm -f "$$rendered"' EXIT; \
-	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" >>"$$rendered"; \
 	  $(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
 	    --values "$(RETRIEVER_VALUES_FILE)" >>"$$rendered"; \
 	  $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
@@ -1073,7 +1121,7 @@ validate-cluster: preflight validate-helm ## [read-only cluster] Validate Helm m
 	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py"
 	@$(HELM) template "$(HINDSIGHT_RELEASE)" "$(HINDSIGHT_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
 	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
+	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" | \
 	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
 	@$(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --values "$(RETRIEVER_VALUES_FILE)" | \

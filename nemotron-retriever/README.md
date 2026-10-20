@@ -5,11 +5,13 @@ This chart deploys two independent, GPU-backed vLLM servers:
 | Component | Model | API |
 | --- | --- | --- |
 | `embedder` | `nvidia/llama-nemotron-embed-vl-1b-v2` | `POST /v1/embeddings` |
-| `reranker` | `nvidia/llama-nemotron-rerank-1b-v2` | native `POST /rerank`; NIM-compatible `POST /v1/ranking` |
+| `reranker` | `nvidia/Nemotron-3.5-Rerank-8B-BF16` | native `POST /rerank`; NIM-compatible `POST /v1/ranking` |
 
-Both Services are `ClusterIP` by default and can be exposed independently through a source-restricted node-address endpoint. They expose the NVIDIA-compatible adapter on port 8000; the adapter forwards requests to the native vLLM servers and translates the reranker API. The chart pins `vllm/vllm-openai:v0.17.0`, the first vLLM release identified by NVIDIA as supporting the embedder architecture. The reranker receives NVIDIA's required query/document score template through a ConfigMap. Each deployment requests one NVIDIA GPU and has its own persistent Hugging Face model cache.
+Both Services are `ClusterIP` by default and can be exposed independently through a source-restricted node-address endpoint. They expose the compatibility adapter on port 8000. The embedder retains `vllm/vllm-openai:v0.17.0`; the reranker overrides `reranker.image` with `vllm/vllm-openai:v0.32.0`, following [NVIDIA's serving example](https://huggingface.co/nvidia/Nemotron-3.5-Rerank-8B-BF16/blob/39aa01525864f736e63f1d5742fc4cf59e754abd/README.md#vllm-usage). Each deployment requests one NVIDIA GPU. The reranker uses a persistent Hugging Face cache; the embedder uses an independent ephemeral cache by default.
 
-Review and accept the model repositories' NVIDIA Open Model License and referenced Llama terms before deployment; those model terms are separate from vLLM's software license.
+The reranker pins checkpoint `39aa01525864f736e63f1d5742fc4cf59e754abd` and its config SHA-256 in the chart, `stack/rag-schema.yaml`, and `stack/components.lock.yaml`. Its unmodified upstream `chat_template.jinja` is vendored as `files/nemotron-rerank.jinja`, with upstream license and attribution files in `files/nemotron-rerank-notices/`. A render test checks its hash and control-token escaping. Set `reranker.chatTemplate` only to deliberately override that template.
+
+The new checkpoint uses OpenMDW-1.1 with a Ministral base under Apache-2.0. Consult each model repository's license and notices for its applicable terms.
 
 ## Prerequisites
 
@@ -66,6 +68,22 @@ Daedalus uses native `/rerank` with `{query, documents, top_n}` and consumes
 `/v1/ranking` with `{query: {text}, passages}` and consume
 `rankings[].logit`. These endpoint names are intentionally distinct.
 
+With `reranker.rankingBackend: classify`, both text ranking APIs call vLLM
+`/classify` once per query/document pair using structured `query` and `document`
+messages. BF16, mean pooling, `use_activation: false`, and
+`add_special_tokens: false` match NVIDIA's example. The adapter sorts the raw
+logits, preserves original document indices, sums token usage for every scored
+pair, and applies `top_n` after scoring. It limits classification concurrency to
+four across requests and returns an error if any pair fails. Scores may be
+negative; larger values indicate greater relevance.
+
+The old model ID `nvidia/llama-nemotron-rerank-1b-v2` remains a served alias for
+existing clients. It selects the new checkpoint. New clients should send
+`nvidia/Nemotron-3.5-Rerank-8B-BF16`, or omit `model` on `/rerank`. Keep the
+compatibility adapter enabled to retain these contracts. Multimodal callers
+can use the proxied `/classify` endpoint with NVIDIA's documented image content
+blocks; the existing `/rerank` and `/v1/ranking` adapters accept text documents.
+
 ### Submit embedding requests
 
 Embedding requests must use role `query` for search queries and role `document` for passages or document images. The model's bundled chat template adds the corresponding `query:` or `passage:` prefix.
@@ -121,7 +139,7 @@ export RERANKER_ENDPOINT=http://127.0.0.1:8001/v1/ranking
 curl --fail-with-body "$RERANKER_ENDPOINT" \
   --header 'Content-Type: application/json' \
   --data '{
-    "model": "nvidia/llama-nemotron-rerank-1b-v2",
+    "model": "nvidia/Nemotron-3.5-Rerank-8B-BF16",
     "query": "How is AI used in robotics?",
     "passages": [
       {"text": "AI helps robots perceive, plan, and act."},
@@ -166,6 +184,22 @@ embedder:
 
 Set `embedder.maxModelLen: 2048` only when serving image-only or text-only inputs and the lower memory footprint is preferred; combined image-and-text inputs require the default `10240`. Add supported vLLM flags with `reranker.extraArgs` or `embedder.extraArgs`.
 
+The reranker serves up to 32,768 tokens per query/document pair, including image
+tokens for direct `/classify` calls. Its BF16 weights total 16,762,318,848 bytes;
+the chart requests a 40 GiB cache, 16 GiB host RAM (32 GiB limit), and one GPU.
+GPU memory must also accommodate activations and the vision encoder. The
+cluster's 48 GB L40S GPUs are the intended deployment target; confirm real
+inference and memory usage during rollout.
+
+For an existing installation, check that the cache PVC can grow from 10 GiB to
+40 GiB before running the root `make update COMPONENTS=retriever` workflow.
+`persistence.existingClaim` must provide that capacity when set. Keep the old
+checkpoint cached for rollback; do not delete the PVC. Rollback values should
+retain the expanded PVC size because Kubernetes cannot shrink it. Preserve
+the previous Helm values/manifests, and verify both ranking APIs from Daedalus
+and a non-node LAN client after rollout. Service names, port 8000, NodePorts
+30085/30086, and LAN access settings are unchanged by this model migration.
+
 The query embedder defaults to two replicas with hard hostname spread, a
 rolling update, a PDB, and independent ephemeral model caches. Pre-pull or warm
 the pinned model revision before a production rollout so a cold replacement
@@ -179,77 +213,59 @@ Both models require `--trust-remote-code`, which executes code downloaded with t
 
 ### Cilium LAN exposure
 
-The repository's `custom-values.yaml` exposes both APIs through the local
-MetalLB `first-pool` while restricting the original client source to
-`192.168.1.0/24`. The embedder receives `192.168.1.12` and the reranker receives
-`192.168.1.13`. Both Services use `externalTrafficPolicy: Local`, so MetalLB
-announces each address from a node with a local ready endpoint and Cilium keeps
-the original client address for the ingress CIDR policy. The fixed NodePorts
-remain available on nodes with a local ready endpoint as a secondary access
-path.
+The repository's `custom-values.yaml` exposes both APIs as `NodePort` Services
+with fixed ports:
 
-Kubernetes only permits `loadBalancerSourceRanges` on `LoadBalancer` Services.
-Cilium must have `bpf.lbSourceRangeAllTypes=true` so those ranges are enforced
-on the allocated NodePorts. The relevant configuration is:
+| Service | NodePort | Service port |
+| --- | --- | --- |
+| `nemotron-retriever-embedder` | `30085` | `8000` |
+| `nemotron-retriever-reranker` | `30086` | `8000` |
+
+Connect to `http://<node-IP>:30085/v1/embeddings` or
+`http://<node-IP>:30086/rerank` (NIM-compatible: `/v1/ranking`). Both Services
+use `externalTrafficPolicy: Cluster`, so any node can forward requests to a
+ready backend, even when the pod runs on another node. The enabled supplemental
+`CiliumNetworkPolicy` permits `host` and `remote-node` traffic only to each
+retriever's API port, allowing cross-node forwarding after source NAT.
 
 ```yaml
-reranker:
-  service:
-    type: LoadBalancer
-    port: 8000
-    externalTrafficPolicy: Local
-    clusterIP: 10.106.42.103
-    nodePort: 30086
-    annotations:
-      service.cilium.io/src-ranges-policy: allow
-      metallb.io/address-pool: first-pool
-      metallb.io/loadBalancerIPs: 192.168.1.13
-    allocateLoadBalancerNodePorts: true
-    loadBalancerSourceRanges:
-      - 192.168.1.0/24
-
 embedder:
   service:
-    type: LoadBalancer
+    type: NodePort
     port: 8000
-    externalTrafficPolicy: Local
-    clusterIP: 10.105.200.146
+    externalTrafficPolicy: Cluster
     nodePort: 30085
-    annotations:
-      service.cilium.io/src-ranges-policy: allow
-      metallb.io/address-pool: first-pool
-      metallb.io/loadBalancerIPs: 192.168.1.12
-    allocateLoadBalancerNodePorts: true
-    loadBalancerSourceRanges:
-      - 192.168.1.0/24
+
+reranker:
+  service:
+    type: NodePort
+    port: 8000
+    externalTrafficPolicy: Cluster
+    nodePort: 30086
 
 networkPolicy:
   ciliumNodePort:
-    enabled: false
+    enabled: true
   ingressCIDRs:
-    reranker:
-      - 192.168.1.0/24
     embedder:
+      - 192.168.1.0/24
+    reranker:
       - 192.168.1.0/24
 ```
 
-The Service source ranges filter the original client before endpoint selection.
-Local external traffic then reaches only a same-node endpoint without source
-NAT, allowing the ordinary `NetworkPolicy` to match the same client CIDR. The
-supplemental node-forwarding `CiliumNetworkPolicy` is disabled for this profile
-because cross-node forwarding would replace the client address before endpoint
-policy evaluation.
-
 The chart renders a separate ingress policy for each endpoint. The CIDR lists
-above are independent, so the embedder and reranker can be exposed to different
-source networks. `networkPolicy.ingressNamespaces` continues to allow the
-listed namespaces to reach both endpoints; set it to `[]` for CIDR-only access.
-An endpoint with no namespace or CIDR sources denies all ingress. CIDR matching
-uses the source address observed by the cluster network plugin, which can differ
-from the client address when NodePort traffic is source-NATed.
+allow direct LAN traffic, and `networkPolicy.ingressNamespaces` continues to
+allow the listed namespaces. With cross-node source NAT, Cilium sees the node
+identity instead of the original client address; the supplemental forwarding
+policy permits that traffic. Consequently, these CIDRs do not enforce a strict
+original-client allowlist on forwarded NodePort traffic. If one is required,
+enforce it before forwarding at the network boundary or use the chart's
+source-restricted LoadBalancer profile.
 
-The root Makefile applies `nemotron-retriever/custom-values.yaml` by default.
-Override `RETRIEVER_VALUES_FILE=` to retain the chart's internal-only
+The root Makefile applies `nemotron-retriever/values-daedalus.yaml` by default;
+it carries the same NodePorts and LAN ingress settings alongside production
+scheduling settings. Keep its exposure settings aligned with
+`custom-values.yaml`. The chart's base `values.yaml` retains internal-only
 `ClusterIP` defaults.
 
 For more than one replica, the chart fails closed unless the update strategy is

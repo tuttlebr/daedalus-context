@@ -3,7 +3,7 @@ fullnameOverride: url-ingest
 
 images:
   crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
-  runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0
+  runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.0.5
   pullPolicy: IfNotPresent
 imagePullSecrets:
   - name: nvcr-imagepullsecret
@@ -26,6 +26,7 @@ persistence:
   pdfClaimName: pdf-server-data
 
 endpoints:
+  embedding: http://nemotron-retriever-embedder.daedalus.svc.cluster.local:8000/v1
   nvIngestHost: nv-ingest
   nvIngestPort: 7670
   milvusUri: http://milvus:19530
@@ -48,8 +49,9 @@ auth:
 schedules:
   suspend: true
   startingDeadlineSeconds: 3600
-  activeDeadlineSeconds: 86400
-  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 82800
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 2592000
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
 
@@ -64,7 +66,7 @@ urlLists:
 
 collections:
   nvidia:
-    schedule: "0 2 * * 0"
+    schedule: "0 2 * * *"
     includePdfs: true
     fileChunkSize: 32
     urlFileChunkSize: 32
@@ -75,7 +77,7 @@ collections:
     clientConcurrencyLimit: 16
     workSize: 30Gi
     resources:
-      requests: {memory: 8Gi, cpu: "4", ephemeral-storage: 10Gi}
+      requests: {memory: 3072Mi, cpu: 375m, ephemeral-storage: 10Gi}
       limits: {memory: 16Gi, cpu: "8", ephemeral-storage: 30Gi}
     crawlers:
       - name: nvidiadocs
@@ -88,7 +90,7 @@ collections:
         inputType: sitemap
         maxAgeDays: 365
   kubernetes:
-    schedule: "0 3 * * 0"
+    schedule: "0 3 * * *"
     includePdfs: true
     fileChunkSize: 64
     urlFileChunkSize: 64
@@ -97,14 +99,14 @@ collections:
     clientConcurrencyLimit: 16
     workSize: 10Gi
     resources:
-      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      requests: {memory: 1024Mi, cpu: 500m, ephemeral-storage: 2Gi}
       limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
     crawlers:
       - name: kubernetes
         file: k8s_url_links.txt
         inputType: url
   vetpartner:
-    schedule: "0 4 * * 0"
+    schedule: "0 4 * * *"
     includePdfs: true
     fileChunkSize: 64
     urlFileChunkSize: 64
@@ -113,14 +115,14 @@ collections:
     clientConcurrencyLimit: 16
     workSize: 10Gi
     resources:
-      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      requests: {memory: 1024Mi, cpu: 575m, ephemeral-storage: 2Gi}
       limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
     crawlers:
       - name: vetpartner
         file: vetpartner_url_links.txt
         inputType: url
   semianalysis:
-    schedule: "0 5 * * 0"
+    schedule: "0 5 * * *"
     includePdfs: true
     fileChunkSize: 64
     urlFileChunkSize: 64
@@ -129,7 +131,7 @@ collections:
     clientConcurrencyLimit: 16
     workSize: 15Gi
     resources:
-      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 4Gi}
+      requests: {memory: 1024Mi, cpu: 250m, ephemeral-storage: 4Gi}
       limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 15Gi}
     crawlers:
       - name: semianalysis
@@ -137,7 +139,7 @@ collections:
         inputType: sitemap
         maxAgeDays: 365
   mentalhealth:
-    schedule: "0 6 * * 0"
+    schedule: "0 6 * * *"
     includePdfs: true
     fileChunkSize: 8
     urlFileChunkSize: 64
@@ -146,7 +148,7 @@ collections:
     clientConcurrencyLimit: 8
     workSize: 10Gi
     resources:
-      requests: {memory: 1Gi, cpu: "1", ephemeral-storage: 2Gi}
+      requests: {memory: 1024Mi, cpu: 250m, ephemeral-storage: 2Gi}
       limits: {memory: 4Gi, cpu: "2", ephemeral-storage: 10Gi}
     crawlers: []
 
@@ -160,3 +162,8 @@ affinity:
               operator: NotIn
               values: [daedalus-06]
 tolerations: []
+
+monitoring:
+  enabled: false
+  labels:
+    release: kube-prometheus-stack

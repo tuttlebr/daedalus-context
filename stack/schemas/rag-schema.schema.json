@@ -2,42 +2,106 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "schemaVersion", "embedding", "reranker", "contracts"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "schemaVersion",
+    "embedding",
+    "reranker",
+    "contracts"
+  ],
   "properties": {
-    "apiVersion": { "const": "daedalus.context/v1" },
-    "kind": { "const": "RetrievalSchema" },
-    "schemaVersion": { "type": "string", "minLength": 1 },
-    "embedding": { "$ref": "#/definitions/model" },
-    "reranker": { "$ref": "#/definitions/model" },
+    "apiVersion": {
+      "const": "daedalus.context/v1"
+    },
+    "kind": {
+      "const": "RetrievalSchema"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "embedding": {
+      "$ref": "#/definitions/model"
+    },
+    "reranker": {
+      "$ref": "#/definitions/model"
+    },
     "contracts": {
       "type": "object",
       "minProperties": 3,
       "additionalProperties": {
         "type": "object",
-        "required": ["path", "responseField"],
+        "required": [
+          "path",
+          "responseField"
+        ],
         "properties": {
-          "path": { "type": "string", "pattern": "^/" },
-          "responseField": { "type": "string", "minLength": 1 },
-          "scoreField": { "type": "string", "minLength": 1 }
+          "path": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "responseField": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scoreField": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
+    },
+    "database": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
     }
   },
   "definitions": {
     "model": {
       "type": "object",
-      "required": ["model", "revision", "configSha256", "maxTokens"],
+      "required": [
+        "model",
+        "revision",
+        "configSha256",
+        "maxTokens"
+      ],
       "properties": {
-        "model": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
-        "revision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-        "configSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "dimension": { "type": "integer", "minimum": 1 },
-        "maxTokens": { "type": "integer", "minimum": 1 },
-        "queryPrefix": { "type": "string" },
-        "documentPrefix": { "type": "string" },
-        "endpointProfile": { "type": "string" },
-        "daedalusEndpointProfile": { "type": "string" },
-        "nimEndpointProfile": { "type": "string" }
+        "model": {
+          "type": "string",
+          "pattern": "^[^/]+/[^/]+$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "configSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "queryPrefix": {
+          "type": "string"
+        },
+        "documentPrefix": {
+          "type": "string"
+        },
+        "endpointProfile": {
+          "type": "string"
+        },
+        "daedalusEndpointProfile": {
+          "type": "string"
+        },
+        "nimEndpointProfile": {
+          "type": "string"
+        }
       }
     }
   }

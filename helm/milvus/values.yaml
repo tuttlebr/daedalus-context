@@ -70,13 +70,14 @@ milvus:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: milvus
             component: proxy
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 250m, memory: 512Mi}
+      requests: {cpu: 100m, memory: 512Mi}
       limits: {cpu: "1", memory: 2Gi}
   queryNode:
     replicas: 3
@@ -84,13 +85,14 @@ milvus:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: milvus
             component: querynode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: "1", memory: 4Gi}
+      requests: {cpu: 250m, memory: 7168Mi}
       limits: {cpu: "4", memory: 12Gi}
   dataNode:
     replicas: 3
@@ -98,13 +100,14 @@ milvus:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: milvus
             component: datanode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: "1", memory: 4Gi}
+      requests: {cpu: 250m, memory: 512Mi}
       limits: {cpu: "4", memory: 12Gi}
   indexNode:
     enabled: false
@@ -114,13 +117,14 @@ milvus:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: milvus
             component: streamingnode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 500m, memory: 2Gi}
+      requests: {cpu: 100m, memory: 512Mi}
       limits: {cpu: "2", memory: 6Gi}
   mixCoordinator:
     replicas: 2
@@ -130,23 +134,24 @@ milvus:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: milvus
             component: mixcoord
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 500m, memory: 1Gi}
+      requests: {cpu: 100m, memory: 512Mi}
       limits: {cpu: "2", memory: 4Gi}
 
   minio:
     enabled: true
     existingSecret: milvus-minio-credentials
     image:
-      # Docker Hub no longer serves this historical release. Quay retains the
-      # byte-identical multi-architecture manifest for the pinned MinIO build.
-      repository: quay.io/minio/minio
-      tag: RELEASE.2024-12-18T13-15-44Z
+      # Mirror of the exact amd64 manifest recovered from healthy cluster nodes.
+      # Upstream historical tags are unavailable; the digest preserves binary identity.
+      repository: daedalus.ddns.me:5050/btuttle/minio
+      tag: RELEASE.2024-12-18T13-15-44Z-amd64@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20
       pullPolicy: IfNotPresent
     # Distributed MinIO members require identical server binaries. Mixed
     # amd64 and arm64 members have different checksums and cannot share a pool.
@@ -183,7 +188,7 @@ milvus:
       runAsGroup: 988
       fsGroup: 988
     resources:
-      requests: {cpu: 500m, memory: 2Gi}
+      requests: {cpu: 250m, memory: 1024Mi}
       limits: {cpu: "2", memory: 4Gi}
 
   etcd:
@@ -200,7 +205,7 @@ milvus:
       accessMode: ReadWriteOnce
       size: 10Gi
     resources:
-      requests: {cpu: 500m, memory: 1Gi}
+      requests: {cpu: 150m, memory: 512Mi}
       limits: {cpu: "2", memory: 4Gi}
 
 # podDisruptionBudgets configures Daedalus-owned budgets missing upstream.

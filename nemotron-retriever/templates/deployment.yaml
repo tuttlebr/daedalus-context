@@ -1,5 +1,6 @@
 {{- range $component := list "reranker" "embedder" }}
 {{- $server := index $.Values $component }}
+{{- $image := default $.Values.image $server.image }}
 {{- if $server.enabled }}
 {{- include "nemotron-retriever.validateServer" (dict "server" $server "component" $component) }}
 ---
@@ -54,8 +55,8 @@ spec:
       {{- end }}
       containers:
         - name: {{ $component }}
-          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
-          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          image: "{{ $image.repository }}:{{ $image.tag }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
           command:
             - vllm
             - serve
@@ -63,7 +64,15 @@ spec:
             - {{ $server.model | quote }}
             - --host=0.0.0.0
             - {{ printf "--port=%d" (int $server.port) | quote }}
+            {{- if $server.servedModelAliases }}
+            - --served-model-name
+            - {{ $server.servedModelName | quote }}
+            {{- range $server.servedModelAliases }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- else }}
             - {{ printf "--served-model-name=%s" $server.servedModelName | quote }}
+            {{- end }}
             - --trust-remote-code
             - {{ printf "--max-model-len=%d" (int $server.maxModelLen) | quote }}
             {{- with $server.revision }}
@@ -138,6 +147,20 @@ spec:
             - python3
             - /opt/nim-compat/nim_compat.py
           env:
+            {{- if eq $component "embedder" }}
+            - name: EMBEDDING_BACKEND
+              value: {{ default "embeddings" $server.embeddingBackend | quote }}
+            - name: EMBEDDING_MODEL
+              value: {{ $server.servedModelName | quote }}
+            {{- end }}
+            {{- if eq $component "reranker" }}
+            - name: RANKING_BACKEND
+              value: {{ default "rerank" $server.rankingBackend | quote }}
+            - name: RANKING_CONCURRENCY
+              value: {{ default 4 $server.rankingConcurrency | quote }}
+            - name: RERANKER_MODEL
+              value: {{ $server.servedModelName | quote }}
+            {{- end }}
             - name: LISTEN_PORT
               value: {{ $.Values.nimCompatibility.port | quote }}
             - name: UPSTREAM_URL

@@ -53,15 +53,13 @@ daedalus.ai/capability: retrieval
 {{- end -}}
 {{- end }}
 
-{{/* Fail closed when Cilium node forwarding is not paired with pre-SNAT filtering. */}}
+{{/* Keep source filtering mandatory for the restricted LoadBalancer profile.
+     Plain NodePort explicitly permits node forwarding without pre-SNAT filtering. */}}
 {{- define "nemotron-retriever.validateServiceExposure" -}}
 {{- $root := .root -}}
 {{- $server := .server -}}
 {{- $component := .component -}}
 {{- if $root.Values.networkPolicy.ciliumNodePort.enabled -}}
-{{- if eq $server.service.type "NodePort" -}}
-{{- fail (printf "%s.service.type=NodePort is unsafe with networkPolicy.ciliumNodePort.enabled=true; use LoadBalancer with loadBalancerSourceRanges so Cilium filters the original source before cross-node SNAT" $component) -}}
-{{- end -}}
 {{- if eq $server.service.type "LoadBalancer" -}}
 {{- if not $server.service.allocateLoadBalancerNodePorts -}}
 {{- fail (printf "%s.service.allocateLoadBalancerNodePorts must be true for Cilium node-address exposure" $component) -}}

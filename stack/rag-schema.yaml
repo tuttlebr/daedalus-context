@@ -1,20 +1,21 @@
 apiVersion: daedalus.context/v1
 kind: RetrievalSchema
-schemaVersion: embed2048-v1
+schemaVersion: nemotron35_nvfp4_20261020
+database: default
 embedding:
-  model: nvidia/llama-nemotron-embed-vl-1b-v2
-  revision: 582e3bf72aee355e3c59ed89de53543c5b0657ee
-  configSha256: f2dfebb580204fe735f6e8b5519d1ed612c6a22df8ab1b4ac26776d910128a46
+  model: nvidia/Nemotron-3.5-Embed-1B-NVFP4
+  revision: 198164478bd2c4f2d3311d64eb563bc8564e0e6d
+  configSha256: a83dbe0d763f1ace6c37496fd004e8d7d4f2d700bdf240d81313e9b85d81d37e
   dimension: 2048
-  maxTokens: 10240
+  maxTokens: 32768
   queryPrefix: "query: "
   documentPrefix: "passage: "
   endpointProfile: nim-embeddings-v1
 reranker:
-  model: nvidia/llama-nemotron-rerank-1b-v2
-  revision: d896ceda696c5c6fe0abf65f63a77c691bbf4548
-  configSha256: 34d45f095f896f950db008c19e2bb4c935fc2866f71212c0cd26022eb1167d7b
-  maxTokens: 8192
+  model: nvidia/Nemotron-3.5-Rerank-8B-BF16
+  revision: 39aa01525864f736e63f1d5742fc4cf59e754abd
+  configSha256: e1f442a21c464cf54259e7ca2ab09f6777f50a61fbf017efed8e6044894b4303
+  maxTokens: 32768
   daedalusEndpointProfile: native-vllm-rerank
   nimEndpointProfile: nim-ranking-v1
 contracts:

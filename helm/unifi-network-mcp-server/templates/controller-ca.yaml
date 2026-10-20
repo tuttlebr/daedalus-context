@@ -1,0 +1,11 @@
+{{- if .Values.controller.caBundle }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "unifi-mcp.fullname" . }}-controller-ca
+  labels:
+    {{- include "unifi-mcp.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- .Values.controller.caBundle | nindent 4 }}
+{{- end }}

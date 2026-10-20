@@ -238,6 +238,7 @@ def validate_approved_acceptance(acceptance: dict[str, Any]) -> None:
 
 def agent_env(environment_name: str) -> str:
     topology = load_yaml(STACK / "topology.yaml")
+    rag = load_yaml(STACK / "rag-schema.yaml")
     environment = load_yaml(STACK / "environments" / f"{environment_name}.yaml")
     releases = topology["releases"]
 
@@ -254,7 +255,10 @@ def agent_env(environment_name: str) -> str:
         "# Generated from stack/topology.yaml and stack/environments/"
         f"{environment_name}.yaml; do not edit.",
         f"EMBEDDING_BASE_URL={url('retriever', 'embeddings', '/v1')}",
+        f"EMBEDDING_MODEL={rag['embedding']['model']}",
+        f"MILVUS_DATABASE={rag.get('database', 'default')}",
         f"RERANKER_BASE_URL={url('retriever', 'reranker', '/rerank')}",
+        f"RERANKER_MODEL={rag['reranker']['model']}",
         f"MILVUS_URI={url('milvus', 'api')}",
         f"NV_INGEST_ENDPOINT={url('nv-ingest', 'api')}",
         f"HINDSIGHT_API_URL={url('hindsight', 'api')}",

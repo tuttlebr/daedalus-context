@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import subprocess
@@ -7,102 +5,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "check_url_ingest_freshness.sh"
 
-
 class UrlIngestFreshnessTests(unittest.TestCase):
-    def run_check(
-        self, cronjob: dict[str, object], jobs: dict[str, object]
-    ) -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as directory:
-            fake_kubectl = Path(directory) / "kubectl"
-            fake_kubectl.write_text(
-                """#!/usr/bin/env python3
-import os
-import sys
+    def check(self, healthy, suspended=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = Path(tmp) / "kubectl"
+            cli.write_text("#!/usr/bin/env python3\nimport os,sys\nprint(os.environ['SUSPENDED'] if 'get' in sys.argv else os.environ['SNAPSHOT'])\n")
+            cli.chmod(0o755)
+            return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env={**os.environ,
+                "KUBECTL": str(cli), "NAMESPACE": "daedalus", "COLLECTIONS": "nvidia",
+                "SUSPENDED": str(suspended).lower(), "SNAPSHOT": json.dumps({"collections": {"nvidia": {"healthy": healthy}}})})
 
-resource = sys.argv[sys.argv.index("get") + 1]
-key = "FAKE_CRONJOB_JSON" if resource == "cronjob" else "FAKE_JOBS_JSON"
-print(os.environ[key])
-""",
-                encoding="utf-8",
-            )
-            fake_kubectl.chmod(0o755)
-            return subprocess.run(
-                ["bash", str(SCRIPT)],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env={
-                    **os.environ,
-                    "KUBECTL": str(fake_kubectl),
-                    "NAMESPACE": "milvus",
-                    "COLLECTIONS": "nvidia",
-                    "FAKE_CRONJOB_JSON": json.dumps(cronjob),
-                    "FAKE_JOBS_JSON": json.dumps(jobs),
-                },
-            )
+    def test_durable_healthy_report_passes(self):
+        self.assertEqual(self.check(True).returncode, 0)
 
-    def test_successful_manual_job_satisfies_never_scheduled_cronjob(self):
-        result = self.run_check(
-            {"spec": {"suspend": False}, "status": {}},
-            {
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "url-ingest-nvidia-manual-verify",
-                            "creationTimestamp": "2026-07-30T03:18:52Z",
-                        },
-                        "status": {
-                            "completionTime": "2026-07-30T03:18:58Z",
-                            "conditions": [
-                                {"type": "Complete", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            },
-        )
+    def test_stale_or_failed_report_fails(self):
+        self.assertEqual(self.check(False).returncode, 1)
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("schedule=none success=2026-07-30T03:18:58Z", result.stdout)
-
-    def test_never_scheduled_cronjob_without_jobs_still_fails(self):
-        result = self.run_check(
-            {"spec": {"suspend": False}, "status": {}},
-            {"items": []},
-        )
-
+    def test_suspension_fails_even_with_recent_success(self):
+        result = self.check(True, True)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("nvidia=never-scheduled", result.stderr)
-
-    def test_latest_failed_manual_job_still_fails(self):
-        result = self.run_check(
-            {"spec": {"suspend": False}, "status": {}},
-            {
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "url-ingest-nvidia-failed",
-                            "creationTimestamp": "2026-07-30T04:00:00Z",
-                        },
-                        "status": {
-                            "completionTime": "2026-07-30T04:01:00Z",
-                            "conditions": [{"type": "Failed", "status": "True"}],
-                        },
-                    }
-                ]
-            },
-        )
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(
-            "nvidia=failed:url-ingest-nvidia-failed",
-            result.stderr,
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertIn("suspended", result.stderr)

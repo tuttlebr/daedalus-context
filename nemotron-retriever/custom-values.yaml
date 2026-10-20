@@ -1,8 +1,7 @@
-# Explicit LAN-only exposure example. Replace the CIDRs with the source network
-# that should be permitted to reach each endpoint.
+# Fixed NodePorts reachable through any node's LAN address.
 networkPolicy:
   ciliumNodePort:
-    enabled: false
+    enabled: true
   ingressCIDRs:
     embedder:
       - 192.168.1.0/24
@@ -11,30 +10,14 @@ networkPolicy:
 
 embedder:
   service:
-    type: LoadBalancer
+    type: NodePort
     port: 8000
-    externalTrafficPolicy: Local
-    clusterIP: 10.105.200.146
+    externalTrafficPolicy: Cluster
     nodePort: 30085
-    annotations:
-      service.cilium.io/src-ranges-policy: allow
-      metallb.io/address-pool: first-pool
-      metallb.io/loadBalancerIPs: 192.168.1.12
-    allocateLoadBalancerNodePorts: true
-    loadBalancerSourceRanges:
-      - 192.168.1.0/24
 
 reranker:
   service:
-    type: LoadBalancer
+    type: NodePort
     port: 8000
-    externalTrafficPolicy: Local
-    clusterIP: 10.106.42.103
+    externalTrafficPolicy: Cluster
     nodePort: 30086
-    annotations:
-      service.cilium.io/src-ranges-policy: allow
-      metallb.io/address-pool: first-pool
-      metallb.io/loadBalancerIPs: 192.168.1.13
-    allocateLoadBalancerNodePorts: true
-    loadBalancerSourceRanges:
-      - 192.168.1.0/24

@@ -29,7 +29,7 @@ service:
     loadBalancerClass: daedalus.ai/nodeport-only
     sourceRanges: []
 resources:
-  requests: {memory: 512Mi, cpu: 500m}
+  requests: {memory: 128Mi, cpu: 50m}
   limits: {memory: 8Gi, cpu: "4"}
 podDisruptionBudget:
   enabled: true

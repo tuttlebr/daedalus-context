@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "url-ingest.fullname" . }}-monitor-code
+data:
+  refresh_monitor.py: |
+{{ .Files.Get "files/refresh_monitor.py" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "url-ingest.fullname" . }}-monitor
+  labels:
+    {{- include "url-ingest.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: url-ingest-monitor}
+  template:
+    metadata:
+      labels: {app: url-ingest-monitor}
+      annotations:
+        checksum/code: {{ .Files.Get "files/refresh_monitor.py" | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: monitor
+          image: python:3.12.12-slim
+          command: [python3, /app/refresh_monitor.py]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}}
+          livenessProbe: {httpGet: {path: /healthz, port: http}}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: code, mountPath: /app, readOnly: true}
+            - {name: contract, mountPath: /etc/refresh, readOnly: true}
+            - {name: manifests, mountPath: /manifests, readOnly: true}
+      volumes:
+        - name: code
+          configMap: {name: {{ include "url-ingest.fullname" . }}-monitor-code}
+        - name: contract
+          configMap: {name: {{ include "url-ingest.fullname" . }}-refresh-contract}
+        - name: manifests
+          persistentVolumeClaim: {claimName: {{ include "url-ingest.fullname" . }}-manifests}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "url-ingest.fullname" . }}-monitor
+  labels: {app: url-ingest-monitor}
+spec:
+  selector: {app: url-ingest-monitor}
+  ports: [{name: http, port: 8080, targetPort: http}]
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: url-ingest-refresh
+  labels: {{ toYaml .Values.monitoring.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {app: url-ingest-monitor}
+  endpoints: [{port: http, path: /metrics, interval: 30s}]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: url-ingest-refresh
+  labels: {{ toYaml .Values.monitoring.labels | nindent 4 }}
+spec:
+  groups:
+    - name: daedalus-refresh
+      rules:
+        - alert: DaedalusCollectionStale
+          expr: daedalus_refresh_fresh == 0
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: 'Collection {{ "{{ $labels.collection }}" }} has no successful refresh within 36 hours'
+        - alert: DaedalusRefreshFailed
+          expr: daedalus_refresh_failures > 0
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: 'Collection {{ "{{ $labels.collection }}" }} has unresolved refresh failures'
+        - alert: DaedalusRefreshStalled
+          expr: daedalus_refresh_stalled == 1
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: 'Collection {{ "{{ $labels.collection }}" }} refresh worker stopped heartbeating'
+        - alert: DaedalusRefreshSuspended
+          expr: kube_cronjob_spec_suspend{namespace="{{ .Release.Namespace }}",cronjob=~"url-ingest-.*"} == 1
+          for: 30m
+          labels: {severity: warning}
+          annotations: {summary: 'A daily context refresh schedule is suspended'}
+        - alert: DaedalusRefreshMonitorUnavailable
+          expr: absent(up{namespace="{{ .Release.Namespace }}",service="url-ingest-monitor"} == 1)
+          for: 10m
+          labels: {severity: critical}
+          annotations: {summary: 'Context freshness monitoring is unavailable'}
+{{- end }}

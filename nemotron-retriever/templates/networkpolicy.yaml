@@ -44,7 +44,7 @@ spec:
 {{- if .Values.networkPolicy.ciliumNodePort.enabled }}
 {{- range $component := list "reranker" "embedder" }}
 {{- $server := index $.Values $component }}
-{{- if and $server.enabled (eq $server.service.type "LoadBalancer") }}
+{{- if and $server.enabled (or (eq $server.service.type "NodePort") (eq $server.service.type "LoadBalancer")) }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

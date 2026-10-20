@@ -136,7 +136,7 @@ services:
     build:
       context: ./url-ingest
       dockerfile: Dockerfile.runner
-    image: ${URL_INGEST_RUNNER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest-runner:0.1.0}
+    image: ${URL_INGEST_RUNNER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.0.5}
     environment:
       PYTHONUNBUFFERED: "1"
       URL_FILE_CHUNK_SIZE: "64"

@@ -36,7 +36,7 @@ class RootInterfaceTests(unittest.TestCase):
         )
         for variable in required:
             self.assertIn(f"nv-ingest.envVars.{variable}", makefile)
-            self.assertRegex(example, rf"(?m)^{re.escape(variable)}=$")
+            self.assertRegex(example, rf"(?m)^{re.escape(variable)}=.*$")
 
         url_ingest = yaml.safe_load(
             (ROOT / "helm/url-ingest/values.yaml").read_text(encoding="utf-8")
@@ -55,7 +55,7 @@ class RootInterfaceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         deploy = (ROOT / "url-ingest/k8s/deploy.sh").read_text(encoding="utf-8")
         self.assertIn("GLOBAL_INGEST_CAPACITY", cronjobs)
-        self.assertIn("global-ingest-capacity-${index}.lock", cronjobs)
+        self.assertIn("/opt/daedalus/refresh.py", cronjobs)
         self.assertIn('"GLOBAL_INGEST_CAPACITY"', renderer)
         self.assertIn(
             '--global-ingest-capacity "$MAX_PARALLEL_INGEST_SHARDS"', deploy

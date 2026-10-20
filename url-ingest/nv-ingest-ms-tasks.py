@@ -1505,4 +1505,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit("Legacy append ingestion is retired. Use the root make refresh-run target.")

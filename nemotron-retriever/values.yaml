@@ -53,7 +53,7 @@ nimCompatibility:
   resources:
     requests:
       cpu: 25m
-      memory: 32Mi
+      memory: 64Mi
     limits:
       cpu: 250m
       memory: 128Mi
@@ -85,18 +85,31 @@ probes:
 reranker:
   enabled: true
   replicaCount: 1
-  model: nvidia/llama-nemotron-rerank-1b-v2
-  servedModelName: nvidia/llama-nemotron-rerank-1b-v2
-  revision: d896ceda696c5c6fe0abf65f63a77c691bbf4548
-  configSha256: 34d45f095f896f950db008c19e2bb4c935fc2866f71212c0cd26022eb1167d7b
+  model: nvidia/Nemotron-3.5-Rerank-8B-BF16
+  servedModelName: nvidia/Nemotron-3.5-Rerank-8B-BF16
+  revision: 39aa01525864f736e63f1d5742fc4cf59e754abd
+  configSha256: e1f442a21c464cf54259e7ca2ab09f6777f50a61fbf017efed8e6044894b4303
   port: 8000
-  maxModelLen: 8192
-  # NVIDIA requires this score template for correct query/document formatting.
-  chatTemplate: |-
-    question:{{ (messages | selectattr("role", "eq", "query") | first).content }}
-
-    passage:{{ (messages | selectattr("role", "eq", "document") | first).content }}
-  extraArgs: []
+  maxModelLen: 32768
+  # Use the checkpoint's vendored template unless explicitly overridden.
+  chatTemplate: ""
+  # The reranker needs a newer runtime than the independently pinned embedder.
+  image:
+    repository: vllm/vllm-openai
+    tag: v0.32.0
+    pullPolicy: IfNotPresent
+  # Keep existing clients that send the previous model ID working.
+  servedModelAliases:
+    - nvidia/llama-nemotron-rerank-1b-v2
+  rankingBackend: classify
+  rankingConcurrency: 4
+  extraArgs:
+    - --dtype=bfloat16
+    - --compilation-config={"compile_mm_encoder":true}
+    - --max-num-seqs=4
+    - --limit-mm-per-prompt={"image":1}
+    - --pooler-config={"seq_pooling_type":"MEAN","use_activation":false}
+    - --chat-template-content-format=openai
   extraEnv: []
   service:
     type: ClusterIP
@@ -115,12 +128,12 @@ reranker:
     loadBalancerSourceRanges: []
   resources:
     requests:
-      cpu: "2"
-      memory: 8Gi
+      cpu: 1000m
+      memory: 16Gi
       nvidia.com/gpu: "1"
     limits:
       cpu: "4"
-      memory: 16Gi
+      memory: 32Gi
       nvidia.com/gpu: "1"
   persistence:
     enabled: true
@@ -131,7 +144,8 @@ reranker:
     storageClass: ""
     accessModes:
       - ReadWriteOnce
-    size: 10Gi
+    # BF16 weights are 16.8 GB; retain room for the previous revision/rollback.
+    size: 40Gi
     annotations: {}
     keep: false
   shm:
@@ -155,15 +169,24 @@ reranker:
 embedder:
   enabled: true
   replicaCount: 1
-  model: nvidia/llama-nemotron-embed-vl-1b-v2
-  servedModelName: nvidia/llama-nemotron-embed-vl-1b-v2
-  revision: 582e3bf72aee355e3c59ed89de53543c5b0657ee
-  configSha256: f2dfebb580204fe735f6e8b5519d1ed612c6a22df8ab1b4ac26776d910128a46
+  model: nvidia/Nemotron-3.5-Embed-1B-NVFP4
+  servedModelName: nvidia/Nemotron-3.5-Embed-1B-NVFP4
+  revision: 198164478bd2c4f2d3311d64eb563bc8564e0e6d
+  configSha256: a83dbe0d763f1ace6c37496fd004e8d7d4f2d700bdf240d81313e9b85d81d37e
   port: 8000
-  # 10240 is required for combined image+text inputs; 2048 is sufficient for
-  # image-only or text-only inputs if GPU memory is constrained.
-  maxModelLen: 10240
-  extraArgs: []
+  embeddingBackend: v2
+  image:
+    repository: vllm/vllm-openai
+    tag: v0.32.0
+    pullPolicy: IfNotPresent
+  maxModelLen: 32768
+  extraArgs:
+    - --linear-backend=marlin
+    - --dtype=bfloat16
+    - --chat-template-content-format=openai
+    - --max-num-seqs=16
+    - --gpu-memory-utilization=0.45
+    - --enforce-eager
   extraEnv: []
   service:
     type: ClusterIP
@@ -182,7 +205,7 @@ embedder:
     loadBalancerSourceRanges: []
   resources:
     requests:
-      cpu: "2"
+      cpu: 1000m
       memory: 8Gi
       nvidia.com/gpu: "1"
     limits:
@@ -237,9 +260,10 @@ networkPolicy:
   ingressCIDRs:
     reranker: []
     embedder: []
-  # Cilium identifies cross-node NodePort traffic as host/remote-node after
-  # source NAT. Enable this only when each externally exposed LoadBalancer
-  # Service filters the original client with loadBalancerSourceRanges.
+  # Allow host/remote-node traffic to the API port of NodePort/LoadBalancer
+  # endpoints so Cilium permits forwarding across nodes after source NAT.
+  # With plain NodePort, ingressCIDRs cannot restrict the original source of
+  # forwarded traffic. LoadBalancer exposure additionally requires source ranges.
   ciliumNodePort:
     enabled: false
 

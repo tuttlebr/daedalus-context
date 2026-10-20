@@ -9,5 +9,5 @@ metadata:
     app.kubernetes.io/component: reranker
 data:
   nemotron-rerank.jinja: |-
-    {{- .Values.reranker.chatTemplate | nindent 4 }}
+    {{- default (.Files.Get "files/nemotron-rerank.jinja") .Values.reranker.chatTemplate | nindent 4 }}
 {{- end }}

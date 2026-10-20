@@ -1,9 +1,11 @@
 import pathlib
+import hashlib
 import shutil
 import subprocess
 import unittest
 
 import yaml
+from jinja2 import Environment
 
 
 CHART_DIR = pathlib.Path(__file__).parents[1]
@@ -36,7 +38,7 @@ class ChartRenderTests(unittest.TestCase):
             labels = metadata.get("labels", {})
             self.assertEqual(labels.get("app.kubernetes.io/name"), "nemotron-retriever")
             self.assertEqual(labels.get("app.kubernetes.io/instance"), "review")
-            self.assertEqual(labels.get("app.kubernetes.io/version"), "0.17.0")
+            self.assertEqual(labels.get("app.kubernetes.io/version"), "0.32.0")
             self.assertIsNotNone(labels.get("app.kubernetes.io/component"))
             self.assertEqual(labels.get("app.kubernetes.io/part-of"), "daedalus-context")
             self.assertEqual(labels.get("daedalus.ai/tier"), "online")
@@ -89,10 +91,48 @@ class ChartRenderTests(unittest.TestCase):
             }
             self.assertEqual(
                 images[deployment["metadata"]["labels"]["app.kubernetes.io/component"]],
-                "vllm/vllm-openai:v0.17.0",
+                "vllm/vllm-openai:v0.32.0",
             )
             self.assertEqual(images["nim-compat"], "python:3.12.11-alpine3.22")
             self.assertTrue(all("@sha256:" not in image for image in images.values()))
+
+    def test_reranker_classification_runtime_and_checkpoint_template(self):
+        result = helm_template()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resources = [r for r in yaml.safe_load_all(result.stdout) if r]
+        deployment = next(r for r in resources if r["kind"] == "Deployment"
+                          and r["metadata"]["labels"]["app.kubernetes.io/component"] == "reranker")
+        containers = deployment["spec"]["template"]["spec"]["containers"]
+        server = next(c for c in containers if c["name"] == "reranker")
+        args = server["args"]
+        self.assertEqual(args[0], "nvidia/Nemotron-3.5-Rerank-8B-BF16")
+        self.assertIn("--revision=39aa01525864f736e63f1d5742fc4cf59e754abd", args)
+        self.assertIn("nvidia/llama-nemotron-rerank-1b-v2", args)
+        for flag in ('--runner=pooling', '--dtype=bfloat16', '--max-model-len=32768',
+                     '--chat-template-content-format=openai',
+                     '--pooler-config={"seq_pooling_type":"MEAN","use_activation":false}'):
+            self.assertIn(flag, args)
+        adapter = next(c for c in containers if c["name"] == "nim-compat")
+        env = {item["name"]: item.get("value") for item in adapter["env"]}
+        self.assertEqual(env["RANKING_BACKEND"], "classify")
+        self.assertEqual(env["RANKING_CONCURRENCY"], "4")
+        cache = next(r for r in resources if r["kind"] == "PersistentVolumeClaim")
+        self.assertEqual(cache["spec"]["resources"]["requests"]["storage"], "40Gi")
+
+        source = (CHART_DIR / "files" / "nemotron-rerank.jinja").read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest(),
+                         "f2fb4bb2c72df2255ca5b7047d8dc38842302fed3860b67ec161144cb71e39e3")
+        template = next(r["data"]["nemotron-rerank.jinja"] for r in resources
+                        if r["kind"] == "ConfigMap" and "nemotron-rerank.jinja" in r["data"])
+        render = Environment().from_string(template).render
+        self.assertEqual(render(messages=[
+            {"role": "query", "content": [{"type": "text", "text": "What is [IMG]?"}]},
+            {"role": "document", "content": [{"type": "text", "text": "Literal <s>."}]},
+        ]), "query: What is [\u200cIMG]?\n\npassage: Literal <\u200cs>.")
+        self.assertEqual(render(messages=[
+            {"role": "query", "content": [{"type": "text", "text": "Question"}]},
+            {"role": "document", "content": [{"type": "image"}, {"type": "text", "text": "Text"}]},
+        ]), "[IMG] query: Question\n\npassage: Text")
 
     def test_component_specific_ingress_cidrs_are_rendered(self):
         result = helm_template(
@@ -121,69 +161,89 @@ class ChartRenderTests(unittest.TestCase):
                 [expected_cidr],
             )
 
-    def test_cilium_lan_exposure_preserves_source_with_local_traffic_policy(self):
+    def test_any_node_exposure_uses_fixed_nodeports_and_scoped_forwarding(self):
+        for values_file in ("custom-values.yaml", "values-daedalus.yaml"):
+            with self.subTest(values_file=values_file):
+                result = helm_template("--values", str(CHART_DIR / values_file))
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                resources = [
+                    resource for resource in yaml.safe_load_all(result.stdout) if resource
+                ]
+                services = {
+                    resource["metadata"]["labels"]["app.kubernetes.io/component"]: resource
+                    for resource in resources
+                    if resource["kind"] == "Service"
+                }
+                self.assertEqual(set(services), {"embedder", "reranker"})
+
+                for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
+                    service = services[component]
+                    self.assertEqual(service["spec"]["type"], "NodePort")
+                    self.assertEqual(service["spec"]["externalTrafficPolicy"], "Cluster")
+                    self.assertEqual(service["spec"]["ports"][0]["nodePort"], node_port)
+                    self.assertNotIn("clusterIP", service["spec"])
+                    self.assertNotIn("loadBalancerClass", service["spec"])
+                    self.assertNotIn("allocateLoadBalancerNodePorts", service["spec"])
+                    self.assertNotIn("loadBalancerSourceRanges", service["spec"])
+                    self.assertNotIn("annotations", service["metadata"])
+
+                policies = [r for r in resources if r["kind"] == "NetworkPolicy"]
+                self.assertEqual(len(policies), 2)
+                for policy in policies:
+                    self.assertIn(
+                        {"ipBlock": {"cidr": "192.168.1.0/24"}},
+                        policy["spec"]["ingress"][0]["from"],
+                    )
+                forwarding = {
+                    r["metadata"]["labels"]["daedalus.ai/target-component"]: r
+                    for r in resources
+                    if r["kind"] == "CiliumNetworkPolicy"
+                }
+                self.assertEqual(set(forwarding), {"embedder", "reranker"})
+                for component, policy in forwarding.items():
+                    self.assertEqual(
+                        policy["spec"]["endpointSelector"]["matchLabels"],
+                        services[component]["spec"]["selector"],
+                    )
+                    self.assertEqual(
+                        policy["spec"]["ingress"],
+                        [{
+                            "fromEntities": ["host", "remote-node"],
+                            "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+                        }],
+                    )
+
+    def test_node_forwarding_only_targets_exposed_services_and_their_api_port(self):
         result = helm_template(
-            "--values",
-            str(CHART_DIR / "custom-values.yaml"),
+            "--set", "networkPolicy.ciliumNodePort.enabled=true",
+            "--set", "embedder.service.type=NodePort",
+            "--set", "nimCompatibility.enabled=false",
+            "--set", "embedder.port=8100",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-
-        resources = [resource for resource in yaml.safe_load_all(result.stdout) if resource]
-        services = {
-            resource["metadata"]["labels"]["app.kubernetes.io/component"]: resource
-            for resource in resources
-            if resource["kind"] == "Service"
-        }
-        self.assertEqual(set(services), {"embedder", "reranker"})
-
-        for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
-            service = services[component]
-            self.assertEqual(service["spec"]["type"], "LoadBalancer")
-            self.assertEqual(service["spec"]["externalTrafficPolicy"], "Local")
-            self.assertEqual(
-                service["spec"]["clusterIP"],
-                {
-                    "embedder": "10.105.200.146",
-                    "reranker": "10.106.42.103",
-                }[component],
-            )
-            self.assertNotIn("loadBalancerClass", service["spec"])
-            self.assertTrue(service["spec"]["allocateLoadBalancerNodePorts"])
-            self.assertEqual(
-                service["spec"]["loadBalancerSourceRanges"], ["192.168.1.0/24"]
-            )
-            self.assertEqual(service["spec"]["ports"][0]["nodePort"], node_port)
-            self.assertEqual(
-                service["metadata"]["annotations"][
-                    "service.cilium.io/src-ranges-policy"
-                ],
-                "allow",
-            )
-            self.assertEqual(
-                service["metadata"]["annotations"]["metallb.io/address-pool"],
-                "first-pool",
-            )
-            self.assertEqual(
-                service["metadata"]["annotations"]["metallb.io/loadBalancerIPs"],
-                {"embedder": "192.168.1.12", "reranker": "192.168.1.13"}[
-                    component
-                ],
-            )
-
-        self.assertFalse(
-            any(resource["kind"] == "CiliumNetworkPolicy" for resource in resources)
+        policies = [
+            r for r in yaml.safe_load_all(result.stdout)
+            if r and r["kind"] == "CiliumNetworkPolicy"
+        ]
+        self.assertEqual(len(policies), 1)
+        self.assertEqual(
+            policies[0]["spec"]["endpointSelector"]["matchLabels"][
+                "app.kubernetes.io/component"
+            ], "embedder",
+        )
+        self.assertEqual(
+            policies[0]["spec"]["ingress"][0]["toPorts"][0]["ports"],
+            [{"port": "8100", "protocol": "TCP"}],
         )
 
-    def test_cilium_node_forwarding_rejects_plain_nodeport(self):
+    def test_load_balancer_forwarding_still_requires_source_filtering(self):
         result = helm_template(
-            "--set",
-            "networkPolicy.ciliumNodePort.enabled=true",
-            "--set",
-            "embedder.service.type=NodePort",
+            "--set", "networkPolicy.ciliumNodePort.enabled=true",
+            "--set", "embedder.service.type=LoadBalancer",
         )
-
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("NodePort is unsafe", result.stderr)
+        self.assertIn("loadBalancerSourceRanges must contain", result.stderr)
 
     def test_empty_ingress_sources_deny_all_ingress(self):
         result = helm_template("--set-json", "networkPolicy.ingressNamespaces=[]")

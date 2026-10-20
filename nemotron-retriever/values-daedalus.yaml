@@ -1,14 +1,23 @@
-# Production values for the shared Daedalus namespace. The Agent consumes both
-# endpoints through same-namespace ClusterIP Services.
+# Production values for the shared Daedalus namespace. Keep LAN exposure aligned
+# with custom-values.yaml; the Agent continues using the internal Service names.
 networkPolicy:
   ciliumNodePort:
-    enabled: false
-  ingressCIDRs: {embedder: [], reranker: []}
+    enabled: true
+  ingressCIDRs:
+    embedder:
+      - 192.168.1.0/24
+    reranker:
+      - 192.168.1.0/24
 
 embedder:
+  # This vLLM profile needs discrete GPU memory; GB10 shares RAM with the host.
+  nodeSelector:
+    kubernetes.io/arch: amd64
   service:
-    type: ClusterIP
+    type: NodePort
     port: 8000
+    externalTrafficPolicy: Cluster
+    nodePort: 30085
   tolerations:
     - key: nvidia.com/gpu
       operator: Equal
@@ -17,8 +26,10 @@ embedder:
 
 reranker:
   service:
-    type: ClusterIP
+    type: NodePort
     port: 8000
+    externalTrafficPolicy: Cluster
+    nodePort: 30086
   tolerations:
     - key: nvidia.com/gpu
       operator: Equal

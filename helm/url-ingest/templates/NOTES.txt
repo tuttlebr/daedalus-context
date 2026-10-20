@@ -1,4 +1,5 @@
-The five URL ingestion schedules are installed in {{ .Release.Namespace }}.
+Five daily refresh schedules are installed in {{ .Release.Namespace }}.
 They are {{ ternary "suspended" "enabled" .Values.schedules.suspend }}.
-Kubernetes and VetPartner lists must be supplied with --set-file during install.
-Corpus staging and ingestion are explicit root Makefile operations, not Helm hooks.
+The rendered retrieval contract includes the source lists, model, and database.
+Use make refresh-run, make refresh-status, and make refresh-verify at the root.
+Persistent freshness metrics are served by url-ingest-monitor:8080/metrics.

@@ -74,6 +74,8 @@ make health-stack
 | Validate, reconcile, and check all selected services | `make deploy` | Reads `.env` and writes Kubernetes resources |
 | Reconcile an already-published update | `make update` | Writes Kubernetes resources |
 | Restart selected long-running workloads | `make redeploy` | Restarts pods; does not delete PVCs |
+| Load configuration and restart all app services | `make restart` | Restarts existing Helm-owned workloads; retains storage |
+| Explain node-loss and storage recovery blockers | `make recovery-status` | Read-only cluster access; loads `.env` |
 | Check provider workloads | `make health-provider` | Read-only cluster access |
 | Check dependencies and data freshness | `make health-dependencies` | Read-only cluster access |
 | Probe providers from Daedalus | `make health-integration` | Read-only cluster access |
@@ -163,6 +165,21 @@ Review at least these settings before deployment:
 
 All eight releases use `DAEDALUS_NAMESPACE=daedalus`. The chart values use
 same-namespace service names; there is no split-namespace production mode.
+
+Keep `MCP_EXTERNAL_ENABLED=false` to keep the authenticated MCP endpoints
+inside the cluster. For operator access, use a localhost-bound `kubectl
+port-forward` over the authenticated Kubernetes connection; the MCP token is
+still required.
+
+For a UniFi controller using a private or self-signed certificate, set
+`UNIFI_CONTROLLER_CA_FILE` to a reviewed public PEM certificate bundle and keep
+`UNIFI_INSECURE_SKIP_VERIFY=false`. The UniFi chart mounts that bundle through a
+ConfigMap and supplies it to Go's TLS verifier through `SSL_CERT_FILE`.
+`UNIFI_BASE_URL` must use a hostname in the certificate. If local DNS does not
+resolve that name, set both `UNIFI_CONTROLLER_HOSTNAME` and
+`UNIFI_CONTROLLER_IP` to add an explicit pod host mapping. Reconcile certificate
+renewals with `make update COMPONENTS=unifi-mcp` after reviewing the replacement
+certificate; never put a controller private key in this repository.
 
 Charts reference, but never create, production credentials. Create and manage
 the following Secrets through the approved Secret-management path:
@@ -306,9 +323,15 @@ Use the lifecycle targets according to intent:
 make deploy     # Load config, validate, reconcile, and check provider health.
 make update     # Reconcile already-published versioned releases.
 make redeploy   # Deliberately restart selected long-running workloads.
+make restart    # Load .env and run redeploy (all components by default).
 ```
 
 None of these targets uninstall releases or delete PVCs.
+`restart` and `redeploy` operate only on this repository's selected releases,
+including Hindsight. They do not restart Agent, Switchyard, Hue, or ESPN merely
+because those applications share `daedalus`. Disabled replicas remain disabled.
+URL-ingest runs a small status/metrics service and five daily CronJobs.
+Use `update` to reconcile templates; `refresh-run` starts explicit data work.
 
 After the new stack, fresh corpus, Agent consumer path, schedules, and external
 MCP endpoints have all passed acceptance, the one-time legacy cleanup is:
@@ -377,6 +400,12 @@ Secret-management path. Do not edit
 The native Daedalus reranker endpoint is `/rerank`. NIM-compatible clients use
 `/v1/ranking`. Keep those contracts distinct.
 
+The reranker uses `nvidia/Nemotron-3.5-Rerank-8B-BF16` through a vLLM 0.32.0
+classification adapter, retaining both ranking contracts and the previous
+model ID as a compatibility alias. The embedder keeps its existing model and
+runtime. See `nemotron-retriever/README.md` for the pinned checkpoint, 40 GiB
+cache requirement, and rollout checks.
+
 ## Health and Diagnostics
 
 Use the narrowest health layer that answers the question:
@@ -417,10 +446,81 @@ difference between `1` and `2` matters.
 Treat Milvus, etcd, MinIO, PDF generations, URL manifests, and Daedalus storage
 as durable data.
 
+### Manual restart with existing storage
+
+```bash
+# Both commands load the root .env; the explicit argument overrides its context.
+make recovery-status EXPECTED_CONTEXT=kubernetes-admin@kubernetes
+make restart EXPECTED_CONTEXT=kubernetes-admin@kubernetes
+
+# Or limit the operation to specific services.
+make restart EXPECTED_CONTEXT=kubernetes-admin@kubernetes COMPONENTS="pdf-server k8s-mcp unifi-mcp"
+```
+
+Restart discovers Deployments and StatefulSets using Helm release ownership,
+including MinIO's older labels. It restarts stateful dependencies first, waits
+for each rollout, and then restarts Deployments. It refuses missing releases,
+missing/unbound storage, unavailable fixed-host volumes, paused workloads,
+partitioned/OnDelete StatefulSets, and stateful pods stranded on unavailable
+nodes. The JSON report explains these blockers; a nonzero recovery-status
+result also signals insufficient ready replicas. Terminal pod records are
+reported separately because an old failure record can coexist with a healthy
+replacement.
+
+If resources are missing, `make deploy` reconciles the charts under the same
+release names and retains existing claims. It can create a new claim when one
+is absent; a new empty volume does not recover old data. Check recovery-status
+and the retained PVs before treating this as data recovery. Restart never
+installs a release, changes credentials, deletes claims, or seeds data.
+
+### Automatic recovery and its limits
+
+Deployment controllers already replace pods after node-loss eviction. Milvus,
+PDF, and MCP topology spread now honors node taints so unavailable nodes do not
+keep replacement pods Pending solely to satisfy spread. Existing probes and
+controllers handle process restarts. Replacements still require compatible
+CPU/GPU capacity, reachable dependencies, and accessible storage.
+
+The root Milvus Helm post-renderer spreads MinIO members with maximum skew one
+across eligible, healthy scheduling domains. With four eligible nodes it keeps
+one of the four members per node. With three, it permits a 2/1/1 distribution
+so all four existing volumes can return to service; losing the node containing
+two members can then interrupt quorum. All MinIO members still depend on the
+same NFS appliance. Updating a template affects replacement/rollout placement;
+it does not rebalance already-running pods automatically.
+
+Abrupt node loss has a separate stateful safety boundary: Kubernetes can leave
+StatefulSet pods Terminating until the old kubelet returns. A NotReady node
+might still be writing to storage. After independently confirming that the
+node is powered off or fenced, the cluster operator can use Kubernetes'
+[non-graceful shutdown procedure](https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/#non-graceful-node-shutdown)
+with the `node.kubernetes.io/out-of-service` taint. This is a node-wide action
+affecting other applications, so the app restart target does not apply it.
+Automatic stateful replacement across this failure requires a fencing
+integration that can establish that safety condition; timeout alone is
+insufficient. Remove the taint only after the node has safely recovered.
+
+Local volumes remain tied to their original node even after pod deletion:
+
+| Service | Current storage/failover boundary |
+| --- | --- |
+| Milvus etcd | Three members on `local-etcd`; two can retain quorum after one node loss, but the lost member needs its node/data restored or a reviewed membership replacement |
+| Hindsight PostgreSQL | Single database on `local-etcd`; automatic cross-node recovery requires database replication or a reviewed migration to suitable shared/replicated storage |
+| NV-Ingest Redis | Fixed primary and replica on `local-fast`; a replica alone does not provide automatic primary promotion |
+| Retriever | Replacement requires eligible GPU/CPU capacity and accessible model cache |
+| MinIO, PDF corpus, URL manifests | Shared NFS claims can be reused on another node while NFS remains available |
+
+Do not change a bound claim's storage class or PV node affinity to make local
+data appear portable. Full automatic recovery for this stack requires a
+separate backed-up migration/replication plan for PostgreSQL and Redis and a
+fencing controller. These Makefile and placement changes do not claim HA or a
+tested recovery-time objective. Use `make health-dependencies` and
+`make health-integration` after workloads recover to verify data and consumers.
+
 | Situation | Action |
 | --- | --- |
 | A release failed | Read the operation JSON, repair the failed component, and rerun the same root target |
-| A collection Job failed | Rerun `make run-ingest COLLECTIONS="<name>"`; successful files remain recorded |
+| A collection Job failed | Check `make refresh-status`; retries are automatic. `make refresh-run COLLECTIONS="<name>"` resumes committed progress |
 | Source URLs changed | Run `make stage-data`, then ingest only affected collections |
 | PDFs changed | Publish a new corpus generation, then ingest affected collections |
 | Existing retrieval failed | Check Milvus counts and retriever health before involving ingestion |
@@ -460,3 +560,84 @@ git diff --check
 
 Preserve unrelated work. Do not add generated datasets, downloaded URLs,
 caches, `.env` files, kubeconfigs, or credentials.
+
+## Continuous refresh and embedding generations
+
+`helm/milvus` owns durable vector storage. `nim-milvus-ms` is a legacy wrapper;
+it does not schedule refreshes. `helm/url-ingest` owns the five daily refresh
+Jobs, persistent source manifests, retry policy, and freshness monitoring.
+`nemotron-retriever` serves the embedding and reranking APIs consumed by both
+refresh workers and daedalus-agent.
+
+The retrieval contract is `stack/rag-schema.yaml`; collection schedules and
+freshness limits are in `stack/collections.yaml`. The root deployment renders
+`helm/url-ingest/files/refresh-contract.json` from those files and the existing
+source lists. The active vector space uses the pinned
+`nvidia/Nemotron-3.5-Embed-1B-NVFP4` checkpoint, 2,048 normalized dimensions,
+and vLLM 0.32 with Marlin on L40S. The adapter sends native agent query messages
+and NV-Ingest-style document requests through the same `/v2/embed` prompt
+contract. The worker uses the pinned tokenizer directly with truncation and
+padding disabled, then makes 1,024-token chunks with 64-token overlap.
+
+The current embedding generation is `nemotron35_nvfp4_20261020`. It was built
+and verified in a staging database, then promoted into `default`, the database
+supported by daedalus-agent. The five collection names remain `nvidia`,
+`kubernetes`, `vetpartner`, `semianalysis`, and `mentalhealth`. Old collections
+are retained in `legacy_pre_nemotron35_20261020` for rollback. Source fingerprints
+identify the model generation independently of its physical database. The
+consumer embedding model must match the active generation; `make render-agent-env`
+prints the model and supported database. Uploaded-document indexes from the old
+generation also require re-ingestion; their originals and old vectors are retained.
+The agent's curated-domain `search_params.metric_type` must be `COSINE`, matching
+the collection indexes. Its private-document search can use `search_params:
+{params: {}}` to let each collection supply its index metric; a hard-coded `L2`
+search fails against the curated cosine indexes.
+The new reranker returns raw logits, so the previous probability-based
+`reranker_min_score` cutoff must be unset until a threshold is calibrated for
+this model. Ranking still orders the passages and returns the configured top five.
+
+NV-Ingest extracts documents; the refresh worker owns chunking, embedding, and
+Milvus writes. Source hashes and deterministic chunk IDs make retries idempotent.
+Every replacement chunk must be visible before old chunks are removed. A failed
+replacement keeps the previous version, and an interrupted partial replacement
+is reconciled on retry. HTTP validators avoid downloading unchanged content.
+Previously known URLs are checked even if omitted from a sitemap; removal
+requires repeated 404/410 observations at least 48 hours apart. PDF removals use
+the same grace period. A missing corpus directory is an error, not a deletion.
+
+Schedules run daily at 02:00–06:00 UTC, with three Kubernetes retries and bounded
+HTTP retries. Shared filesystem locks release when a worker dies. PDFs are
+checked first; interrupted URL scans resume with the least recently attempted
+sources to prevent starvation. The 23-hour deadline keeps a stuck run from
+blocking future daily schedules. Large initial backfills may span multiple runs.
+
+```bash
+set -a; source .env; set +a
+export EXPECTED_CONTEXT='kubernetes-admin@kubernetes'
+make refresh-run COLLECTIONS="nvidia kubernetes vetpartner semianalysis mentalhealth"
+make refresh-status
+make refresh-verify  # starts a read-only retrieval acceptance Job
+make health-dependencies COMPONENTS=url-ingest
+```
+
+`REFRESH_LIMIT=1` runs a bounded smoke test and never marks a collection fresh.
+`run-ingest` delegates to the new reconciler; the legacy append-only runner is
+retired. Production `.env` must keep `URL_INGEST_SUSPEND=false` so upgrades do
+not accidentally disable automation. A new installation defaults to suspended
+until its model and corpus paths are validated.
+
+Reports live on the manifest PVC under `refresh/<generation>/runs/<collection>/`
+and `refresh/<generation>/status/`. Failure journals retain every source error;
+status responses include the first 100 errors at most. `url-ingest-monitor:8080`
+serves `/status`, `/metrics`, and `/readyz`. Process readiness is separate from
+corpus freshness. Prometheus alerts cover stale collections (36 hours), failures,
+lost worker heartbeats, suspended schedules, and missing monitoring. An initial
+or partially failed rebuild remains visibly unhealthy until a complete scan
+succeeds. Kubernetes Job TTL is 30 days; durable reports survive Job deletion.
+
+For a model migration, build and validate a new generation, verify retrieval,
+then archive the previous collections and promote the new generation into
+`default` while refresh writers are stopped. Update the consumer model together
+with promotion. Rollback reverses the recorded collection moves and restores
+the previous serving model; do not reset etcd,
+delete PVCs, or merge vectors from different models.

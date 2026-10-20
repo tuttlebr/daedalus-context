@@ -19,6 +19,10 @@ controller:
   existingSecret: unifi-network-mcp-unifi-api
   apiKeyKey: api-key
   cidr: 192.0.2.10/32
+  # Optional PEM trust bundle for a private controller CA/self-signed certificate.
+  caBundle: ""
+  # Resolve the controller's certificate hostname without disabling TLS checks.
+  hostAliases: []
 service:
   port: 8080
   external:
@@ -27,7 +31,7 @@ service:
     loadBalancerClass: daedalus.ai/nodeport-only
     sourceRanges: []
 resources:
-  requests: {memory: 64Mi, cpu: 50m}
+  requests: {memory: 64Mi, cpu: 25m}
   limits: {memory: 256Mi, cpu: 500m}
 podDisruptionBudget:
   enabled: true

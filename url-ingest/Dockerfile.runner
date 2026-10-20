@@ -1,5 +1,6 @@
 FROM nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
 
 COPY --chmod=0555 nv-ingest-ms-tasks.py /opt/daedalus/nv-ingest-ms-tasks.py
+COPY --chmod=0555 refresh*.py /opt/daedalus/
 
-ENTRYPOINT ["/opt/nv_ingest_runtime/bin/python3", "/opt/daedalus/nv-ingest-ms-tasks.py"]
+ENTRYPOINT ["/opt/nv_ingest_runtime/bin/python3", "/opt/daedalus/refresh.py"]

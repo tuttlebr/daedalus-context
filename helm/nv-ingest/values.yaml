@@ -2,6 +2,10 @@
 nv-ingest:
   fullnameOverride: nv-ingest
   replicaCount: 2
+  resources:
+    requests:
+      memory: 20Gi
+      cpu: '3'
   image:
     repository: nvcr.io/nvidia/nemo-microservices/nv-ingest
     tag: 26.3.0
@@ -17,7 +21,7 @@ nv-ingest:
   milvusDeployed: false
   envVars:
     EMBEDDING_NIM_ENDPOINT: http://nemotron-retriever-embedder:8000/v1
-    EMBEDDING_NIM_MODEL_NAME: nvidia/llama-nemotron-embed-vl-1b-v2
+    EMBEDDING_NIM_MODEL_NAME: nvidia/Nemotron-3.5-Embed-1B-NVFP4
     MILVUS_ENDPOINT: http://milvus:19530
     MINIO_INTERNAL_ADDRESS: http://milvus-minio:9000
     MINIO_PUBLIC_ADDRESS: http://milvus-minio:9000
@@ -48,6 +52,10 @@ nv-ingest:
       persistence:
         storageClass: local-fast
         size: 50Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
     replica:
       replicaCount: 1
       nodeSelector:
@@ -55,6 +63,20 @@ nv-ingest:
       persistence:
         storageClass: local-fast
         size: 50Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
+  opentelemetry-collector:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 320Mi
+  zipkin:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 2560Mi
 
 # podDisruptionBudget configures the API availability budget missing upstream.
 podDisruptionBudget:
