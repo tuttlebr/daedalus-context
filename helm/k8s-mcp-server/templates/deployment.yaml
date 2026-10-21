@@ -43,6 +43,22 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: prepare-opencode-config
+          image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [sh, -c, "cp -R /home/appuser/.config/opencode/. /opencode-config/"]
+          volumeMounts:
+            - {name: opencode-config, mountPath: /opencode-config}
+          resources:
+            requests: {memory: 32Mi, cpu: 10m}
+            limits: {memory: 128Mi, cpu: 100m}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
       containers:
         - name: k8s-mcp-server
           image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
@@ -51,8 +67,11 @@ spec:
           env:
             - {name: SERVER_MODE, value: streamable-http}
             - {name: SERVER_PORT, value: "8080"}
-            - {name: SERVER_READ_ONLY, value: "true"}
-            - {name: SERVER_NO_HELM, value: "true"}
+            - {name: SERVER_READ_ONLY, value: {{ .Values.server.readOnly | quote }}}
+            - {name: SERVER_NO_HELM, value: {{ .Values.server.noHelm | quote }}}
+            - {name: MCP_ENABLE_EXEC, value: {{ .Values.server.enableExec | quote }}}
+            - {name: MCP_ENABLE_KUBECTL, value: {{ .Values.server.enableKubectl | quote }}}
+            - {name: MCP_ENABLE_AGENT_WRITE, value: {{ .Values.server.enableAgentWrite | quote }}}
             - {name: MCP_REQUIRE_AUTH, value: "true"}
             - name: MCP_AUTH_TOKEN
               valueFrom: {secretKeyRef: {name: {{ .Values.auth.existingSecret }}, key: {{ .Values.auth.tokenKey }}}}
@@ -63,7 +82,11 @@ spec:
             - name: OPENCODE_API_KEY
               valueFrom: {secretKeyRef: {name: {{ .Values.agent.existingSecret }}, key: {{ .Values.agent.apiKeyKey }}, optional: true}}
             - name: OPENCODE_MODEL
+              {{- if .Values.agent.model }}
+              value: {{ .Values.agent.model | quote }}
+              {{- else }}
               valueFrom: {secretKeyRef: {name: {{ .Values.agent.existingSecret }}, key: {{ .Values.agent.modelKey }}, optional: true}}
+              {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -71,6 +94,8 @@ spec:
             - {name: helm-cache, mountPath: /home/appuser/.cache/helm}
             - {name: helm-config, mountPath: /home/appuser/.config/helm}
             - {name: opencode-data, mountPath: /home/appuser/.local/share/opencode}
+            - {name: opencode-state, mountPath: /home/appuser/.local/state}
+            - {name: opencode-config, mountPath: /home/appuser/.config/opencode}
             - {name: opencode-cache, mountPath: /home/appuser/.cache/opencode}
           livenessProbe: {httpGet: {path: /livez, port: http}, initialDelaySeconds: 10, periodSeconds: 30, timeoutSeconds: 5}
           readinessProbe: {httpGet: {path: /readyz, port: http}, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3}
@@ -85,4 +110,6 @@ spec:
         - {name: helm-cache, emptyDir: {}}
         - {name: helm-config, emptyDir: {}}
         - {name: opencode-data, emptyDir: {}}
+        - {name: opencode-state, emptyDir: {}}
+        - {name: opencode-config, emptyDir: {}}
         - {name: opencode-cache, emptyDir: {}}

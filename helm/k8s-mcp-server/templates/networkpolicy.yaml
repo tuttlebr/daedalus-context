@@ -27,6 +27,33 @@ spec:
         - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
           rules: {dns: [{matchPattern: "*"}]}
     - toEntities: [kube-apiserver]
+    {{- if .Values.networkPolicy.agentBackend.enabled }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            {{- required "networkPolicy.agentBackend.podSelector is required when enabled" .Values.networkPolicy.agentBackend.podSelector | toYaml | nindent 12 }}
+      toPorts:
+        - ports: [{port: {{ .Values.networkPolicy.agentBackend.port | quote }}, protocol: TCP}]
+    {{- end }}
+{{- if .Values.networkPolicy.agentBackend.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "k8s-mcp.fullname" . }}-agent-backend
+  labels:
+    {{- include "k8s-mcp.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- toYaml .Values.networkPolicy.agentBackend.podSelector | nindent 6 }}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "k8s-mcp.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{port: {{ .Values.networkPolicy.agentBackend.port | quote }}, protocol: TCP}]
+{{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

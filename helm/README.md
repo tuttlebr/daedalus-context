@@ -12,7 +12,7 @@ rollback, values, and status while sharing same-namespace service discovery.
 | `nv-ingest` | `helm/nv-ingest` | Milvus, MinIO, retriever, NGC Secrets |
 | `pdf-server` | `helm/pdf-server` | NFS storage |
 | `url-ingest` | `helm/url-ingest` | all ingestion providers and existing Secrets |
-| `k8s-mcp-server` | `helm/k8s-mcp-server` | Kubernetes RBAC and auth Secret |
+| `k8s-mcp-server` | `helm/k8s-mcp-server` | Configurable read/write RBAC, auth Secret |
 | `unifi-network-mcp-server` | `helm/unifi-network-mcp-server` | UniFi controller and auth Secrets |
 
 The charts follow standard Helm conventions: configuration is in

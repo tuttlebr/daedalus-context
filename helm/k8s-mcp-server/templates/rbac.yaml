@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "k8s-mcp.labels" . | nindent 4 }}
 rules:
+  {{- if not .Values.server.noHelm }}
+  # Helm stores release state in Secrets, including for read-only queries.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch]
+  {{- end }}
   - apiGroups: [""]
     resources: [pods, pods/log, services, endpoints, configmaps, namespaces, nodes, persistentvolumes, persistentvolumeclaims, events, replicationcontrollers, serviceaccounts, resourcequotas, limitranges]
     verbs: [get, list, watch]
@@ -50,4 +56,34 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "k8s-mcp.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if not .Values.server.readOnly }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "k8s-mcp.fullname" . }}-readwrite
+  labels:
+    {{- include "k8s-mcp.labels" . | nindent 4 }}
+rules:
+  # Generic resource and Helm tools operate across namespaces and API groups,
+  # including CRDs, scale subresources, exec, and Helm release Secrets.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete, deletecollection]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "k8s-mcp.fullname" . }}-readwrite
+  labels:
+    {{- include "k8s-mcp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ include "k8s-mcp.fullname" . }}-readwrite
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-mcp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

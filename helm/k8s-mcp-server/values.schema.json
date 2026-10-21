@@ -3,6 +3,17 @@
   "type": "object",
   "required": ["replicaCount", "image", "auth", "service"],
   "properties": {
+    "server": {
+      "type": "object",
+      "required": ["readOnly", "noHelm", "enableExec", "enableKubectl", "enableAgentWrite"],
+      "properties": {
+        "readOnly": {"type": "boolean"},
+        "noHelm": {"type": "boolean"},
+        "enableExec": {"type": "boolean"},
+        "enableKubectl": {"type": "boolean"},
+        "enableAgentWrite": {"type": "boolean"}
+      }
+    },
     "replicaCount": {"type": "integer", "minimum": 1},
     "image": {
       "type": "object",

@@ -1,0 +1,14 @@
+# Reuse Daedalus's existing autonomous-model credentials and Switchyard route.
+# Only the two specified Secret keys are mounted; credentials stay in Kubernetes.
+agent:
+  existingSecret: daedalus-backend-env
+  baseUrlKey: AUTONOMOUS_LLM_MODEL_BASE_URL
+  apiKeyKey: AUTONOMOUS_LLM_MODEL_API_KEY
+  model: switchyard/daedalus/local
+networkPolicy:
+  agentBackend:
+    enabled: true
+    podSelector:
+      app.kubernetes.io/name: switchyard
+      app.kubernetes.io/instance: switchyard
+    port: 4000

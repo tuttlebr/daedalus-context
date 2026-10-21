@@ -11,6 +11,12 @@ serviceAccount:
   name: ""
 rbac:
   create: true
+server:
+  readOnly: true
+  noHelm: true
+  enableExec: false
+  enableKubectl: false
+  enableAgentWrite: false
 auth:
   existingSecret: k8s-mcp-auth
   tokenKey: token
@@ -20,6 +26,8 @@ agent:
   baseUrlKey: base-url
   apiKeyKey: api-key
   modelKey: model
+  # Optional provider/model override when sharing another application's Secret.
+  model: ""
 service:
   type: ClusterIP
   port: 8080
@@ -36,6 +44,11 @@ podDisruptionBudget:
   minAvailable: 1
 networkPolicy:
   enabled: true
+  # Optional same-namespace model backend. Adds matching ingress and egress.
+  agentBackend:
+    enabled: false
+    podSelector: {}
+    port: 4000
   externalHttpsFqdns:
     - "*.nvidia.com"
     - "*.amazonaws.com"

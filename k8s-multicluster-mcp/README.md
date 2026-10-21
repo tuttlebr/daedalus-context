@@ -468,6 +468,18 @@ This works for any resource type, including CRDs.
 
 ## Deployment
 
+The [active Helm chart](../helm/k8s-mcp-server/README.md) deploys in `daedalus`.
+It uses in-cluster ServiceAccount credentials. By default, the chart enables
+`SERVER_READ_ONLY`, `SERVER_NO_HELM`, and `MCP_REQUIRE_AUTH`, with observer RBAC
+that excludes Secret data. Persist `K8S_MCP_READ_ONLY=false` and
+`K8S_MCP_NO_HELM=false` in the root `.env` to enable Kubernetes and Helm writes
+with cluster-wide resource CRUD permissions. Helm also requires Secret access
+for release state. The independent `K8S_MCP_ENABLE_EXEC`,
+`K8S_MCP_ENABLE_KUBECTL`, and `K8S_MCP_ENABLE_AGENT_WRITE` settings default to
+`false`; set them to `true` to expose those capabilities in write-enabled mode.
+The [chart documentation](../helm/k8s-mcp-server/README.md) describes the RBAC
+and rollback behavior. HTTP authentication remains mandatory in every mode.
+
 ### Kubernetes In-Cluster
 
 The included manifest at `deploy/k8s-mcp-server.yaml` provides a safe-by-default in-cluster deployment. It uses the pod ServiceAccount for Kubernetes access, runs in read-only mode, and requires an MCP bearer token for HTTP MCP requests.
@@ -577,7 +589,10 @@ The included ClusterRole (`k8s-mcp-server-readonly`) grants read access to stand
 - **policy** — pod disruption budgets
 - **metrics.k8s.io** — pod and node metrics
 
-For write operations, create a separate ClusterRole with the necessary verbs and bind it to the ServiceAccount.
+The root Helm chart creates and binds a separate writer ClusterRole when
+`K8S_MCP_READ_ONLY=false`. It grants cluster-wide resource CRUD permissions,
+including Secrets and custom resources, without the RBAC `bind`, `escalate`,
+or `impersonate` verbs. See the [chart configuration](../helm/k8s-mcp-server/README.md).
 
 ## Development
 

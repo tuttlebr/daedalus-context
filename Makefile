@@ -35,6 +35,12 @@ override K8S_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
 override UNIFI_MCP_NAMESPACE := $(DAEDALUS_NAMESPACE)
 override RETRIEVER_NAMESPACE := $(DAEDALUS_NAMESPACE)
 K8S_MCP_NODE_PORT ?= 30800
+K8S_MCP_READ_ONLY ?= true
+K8S_MCP_NO_HELM ?= true
+K8S_MCP_ENABLE_EXEC ?= false
+K8S_MCP_ENABLE_KUBECTL ?= false
+K8S_MCP_ENABLE_AGENT_WRITE ?= false
+K8S_MCP_VALUES_FILE ?=
 UNIFI_MCP_NODE_PORT ?= 30081
 MCP_EXTERNAL_CLIENT_CIDR ?= 192.168.1.0/24
 MCP_EXTERNAL_ENABLED ?= false
@@ -277,6 +283,11 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 	  'url-ingest namespace' '$(URL_INGEST_NAMESPACE)' \
 	  'k8s-mcp namespace' '$(K8S_MCP_NAMESPACE)' \
 	  'k8s-mcp nodeport' '$(K8S_MCP_NODE_PORT)' \
+	  'k8s-mcp read-only' '$(K8S_MCP_READ_ONLY)' \
+	  'k8s-mcp no-helm' '$(K8S_MCP_NO_HELM)' \
+	  'k8s-mcp exec' '$(K8S_MCP_ENABLE_EXEC)' \
+	  'k8s-mcp kubectl' '$(K8S_MCP_ENABLE_KUBECTL)' \
+	  'k8s-mcp agent writes' '$(K8S_MCP_ENABLE_AGENT_WRITE)' \
 	  'unifi-mcp namespace' '$(UNIFI_MCP_NAMESPACE)' \
 	  'unifi-mcp nodeport' '$(UNIFI_MCP_NODE_PORT)' \
 	  'MCP external clients' '$(MCP_EXTERNAL_CLIENT_CIDR)' \
@@ -588,6 +599,9 @@ deploy-url-ingest:
 
 deploy-k8s-mcp:
 	@image='$(K8S_MCP_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; external_args=(); helm_args=(); \
+	  if [[ -n "$(K8S_MCP_VALUES_FILE)" ]]; then \
+	    helm_args+=(--values "$(K8S_MCP_VALUES_FILE)"); \
+	  fi; \
 	  if [[ "$(MCP_EXTERNAL_ENABLED)" == true ]]; then \
 	    external_args+=(--set-string 'service.external.sourceRanges[0]=$(MCP_EXTERNAL_CLIENT_CIDR)'); \
 	  else \
@@ -596,6 +610,10 @@ deploy-k8s-mcp:
 	  $(HELM) upgrade --install k8s-mcp-server "$(K8S_MCP_CHART)" \
 	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
+	    --set server.readOnly="$(K8S_MCP_READ_ONLY)" --set server.noHelm="$(K8S_MCP_NO_HELM)" \
+	    --set server.enableExec="$(K8S_MCP_ENABLE_EXEC)" \
+	    --set server.enableKubectl="$(K8S_MCP_ENABLE_KUBECTL)" \
+	    --set server.enableAgentWrite="$(K8S_MCP_ENABLE_AGENT_WRITE)" \
 	    --set service.external.enabled="$(MCP_EXTERNAL_ENABLED)" \
 	    --set service.external.nodePort="$(K8S_MCP_NODE_PORT)" "$${external_args[@]}" \
 	    "$${helm_args[@]}" --history-max 10 --timeout "$(ROLLOUT_TIMEOUT)"; \
