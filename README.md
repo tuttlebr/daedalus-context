@@ -608,8 +608,32 @@ the same grace period. A missing corpus directory is an error, not a deletion.
 Schedules run daily at 02:00–06:00 UTC, with three Kubernetes retries and bounded
 HTTP retries. Shared filesystem locks release when a worker dies. PDFs are
 checked first; interrupted URL scans resume with the least recently attempted
-sources to prevent starvation. The 23-hour deadline keeps a stuck run from
-blocking future daily schedules. Large initial backfills may span multiple runs.
+sources to prevent starvation. Previously failed sources and expired deletion
+grace periods take priority over new sources on the next pass. Workers checkpoint
+and finish a partial pass after a 21-hour work budget, leaving two hours before
+Kubernetes' 23-hour hard deadline for in-flight work to settle. Partial passes do
+not advance freshness. Large initial backfills may span multiple daily runs.
+An overlapping manual or scheduled attempt exits successfully with
+`state: skipped_active`; it does not replace the active worker's report or mark
+the collection fresh. This also covers manual backfills, which Kubernetes'
+CronJob concurrency policy does not track.
+
+Requests to each host are serialized and paced, including fast 304 responses.
+The default minimum interval is 0.5 seconds; SemiAnalysis starts at 5 seconds and
+the larger NVIDIA corpus uses 0.1 seconds.
+Repeated HTTP 403 responses, 429 throttling, and 503 responses activate a
+durable host cooldown that survives retry pods and honors `Retry-After`.
+Blocked hosts also increase their persistent request interval, up to 30 seconds.
+Errors are published immediately, and an active cooldown is explicitly unhealthy
+with a separate Prometheus alert; an old success cannot hide the block.
+NV-Ingest result requests use a bounded 10-minute read timeout for PDFs, allowing
+large manuals to finish extraction, while URL extraction retains a one-minute
+read timeout. Transport and Job retry limits still apply.
+Retries of the same Kubernetes Job reuse its successful source checks; a new
+daily Job revalidates them. HTTP access failures remain visible as failures.
+404/410 observations within the 48-hour deletion grace period appear as
+`pending_removals`, preserve existing vectors, and do not consume immediate
+Job retries. They do not advance the collection's freshness timestamp.
 
 ```bash
 set -a; source .env; set +a

@@ -20,7 +20,47 @@ from pathlib import Path
 
 from refresh_fetch import SourceRemoved, discover, fetch, session
 from refresh_milvus import Store, group_results
-from refresh_state import RunReport, State, collection_lock, contract_fingerprint, digest, heartbeat, capacity_slot
+from refresh_state import (RunReport, State, CollectionBusy, atomic_json, collection_lock,
+                           contract_fingerprint, digest, heartbeat, capacity_slot)
+from refresh_http import HostGovernor
+
+
+class RefreshFailed(RuntimeError):
+    """Source failures are already recorded; the Job should retry without a traceback."""
+
+
+def pending_removal(report: RunReport, source: str) -> None:
+    report.data["pending_removals"] += 1
+    samples = report.data.setdefault("pending_removal_samples", [])
+    if len(samples) < 10:
+        samples.append(source)
+
+
+def download_source(item, previous: dict, cache: Path, governor: HostGovernor, job_id: str):
+    source, entry = item
+    try:
+        cached = Path(previous['cache_path']) if previous.get('cache_path') else None
+        if previous.get('last_checked_job') == job_id and cached and cached.is_file():
+            return source, cached, {**previous, '_reused_check': True}, None
+        with session(governor) as http:
+            path, document = fetch(http, source, previous, cache,
+                                   try_markdown=entry.get('try_markdown', False))
+        document.pop('last_error', None)
+        return source, path, {**document, 'last_checked_job': job_id}, None
+    except Exception as error:
+        return source, None, previous, error
+
+
+def source_priority(item, documents: dict, now: float, grace_seconds: float):
+    source = item[0]
+    document = documents.get(source, {})
+    attempted = document.get('last_attempt', 0)
+    missing = document.get('missing_since', 0)
+    unfinished = (document.get('last_error') or not document.get('sha256') or
+                  document.get('sha256') != document.get('ingested_hash'))
+    retry_due = attempted and not document.get('deleted') and (
+        (missing and now - missing >= grace_seconds) or (not missing and unfinished))
+    return (0 if retry_due else 1 if not attempted else 2, attempted, source)
 
 
 def legacy_client():
@@ -38,8 +78,12 @@ def extract_batch(paths: list[str], contract: dict, kind: str) -> tuple[list, li
     old = legacy_client()
     embedding = contract["embedding"]
     chunking = contract["chunking"]
+    # PDF extraction can outlive a short HTTP read on a thousand-page manual.
+    # Keep transport waits bounded without treating normal extraction time as
+    # a terminal failure. HTML requests retain the shorter deadline.
+    request_timeout = 600 if kind == 'pdf' else 60
     client = old.BoundedNvIngestClient(
-        request_timeout_seconds=60, retry_delay_seconds=5,
+        request_timeout_seconds=request_timeout, retry_delay_seconds=5,
         message_client_hostname=os.getenv("NV_INGEST_MESSAGE_HOST", "nv-ingest"),
         message_client_port=int(os.getenv("NV_INGEST_MESSAGE_PORT", "7670")),
         worker_pool_size=4,
@@ -52,7 +96,7 @@ def extract_batch(paths: list[str], contract: dict, kind: str) -> tuple[list, li
     with builder as ingestor:
         results, failures = ingestor.ingest(
             show_progress=False, return_failures=True, batch_size=4,
-            concurrency_limit=4, timeout=60, max_job_retries=120,
+            concurrency_limit=4, timeout=request_timeout, max_job_retries=120,
             retry_delay=5, fail_on_submit_error=True,
         )
         completed = old._submitted_completed_files(paths, ingestor, failures)
@@ -79,7 +123,8 @@ def process_batch(batch: list[tuple[str, Path, dict]], contract: dict, kind: str
         completed = {str(Path(p).resolve()) for p in completed}
         grouped = group_results(results, {str(path): source for source, path, _ in batch})
     except Exception as error:
-        for source, _, _ in batch:
+        for source, _, document in batch:
+            state.record(source, {**document, 'last_error': type(error).__name__})
             report.fail(source, error)
         return
     for source, path, document in batch:
@@ -87,25 +132,50 @@ def process_batch(batch: list[tuple[str, Path, dict]], contract: dict, kind: str
             if str(path.resolve()) not in completed:
                 raise RuntimeError("NV-Ingest did not confirm completion for this source")
             rows = store.replace(source, document["sha256"], grouped.get(source, []))
+            document.pop('last_error', None)
             state.record(source, {**document, "ingested_hash": document["sha256"],
                                   "row_count": rows, "ingested_at": time.time(), "deleted": False})
             report.data["updated"] += 1
             report.write()
         except Exception as error:
+            state.record(source, {**document, 'last_error': type(error).__name__})
             report.fail(source, error)
 
 
 def run(contract: dict, alias: str, state_root: Path, cache: Path,
-        pdf_root: Path, *, bootstrap_cache: Path | None = None, limit: int = 0) -> dict:
-    from pymilvus import MilvusClient
+        pdf_root: Path, *, bootstrap_cache: Path | None = None, limit: int = 0,
+        budget_seconds: float = 75600) -> dict:
     collection = contract["collections"][alias]
     fingerprint = contract_fingerprint(contract)
     generation = contract["generation"]
     root = state_root / generation
-    with collection_lock(root / "locks", alias), heartbeat(root, alias):
+    run_id = os.getenv("POD_NAME") or f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
+    job_id = os.getenv("JOB_NAME") or run_id
+    with contextlib.ExitStack() as owned:
+        try:
+            owned.enter_context(collection_lock(root / "locks", alias))
+        except CollectionBusy:
+            # A manual backfill is outside CronJob Forbid's ownership. Preserve
+            # its report, heartbeat, lock inode, and freshness timestamp.
+            skipped = {"run_id": run_id, "collection": alias, "state": "skipped_active",
+                       "reason": "another refresh owns the collection", "at": time.time()}
+            atomic_json(root / "runs" / alias / f"{run_id}.json", skipped)
+            print(json.dumps(skipped), flush=True)
+            return skipped
+        owned.enter_context(heartbeat(root, alias))
+        from pymilvus import MilvusClient
         state = State(root / "collections", alias, fingerprint)
-        run_id = os.getenv("POD_NAME") or f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
         report = RunReport(root, alias, fingerprint, run_id)
+        report.data['job_id'] = job_id
+        governor = HostGovernor(state.root / 'http-hosts',
+                                collection.get('http_min_interval_seconds', 0.5))
+        deadline = time.monotonic() + budget_seconds
+        report.data['budget_exhausted'] = False
+        def budget_available():
+            if time.monotonic() >= deadline:
+                report.data['budget_exhausted'] = True
+                return False
+            return True
         report.data["last_success"] = state.data.get("last_success", 0)
         report.data["physical_collection"] = physical_collection(alias, generation)
         report.data["milvus_database"] = contract.get("active_database", contract["milvus_database"])
@@ -123,7 +193,7 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
             client.using_database(database)
             store = Store(client, report.data["physical_collection"], fingerprint, contract["embedding"]["dimension"])
             store.ensure()
-            with session() as http:
+            with session(governor) as http:
                 sources, discovery_errors = discover(http, collection.get("urls", []))
             for error in discovery_errors:
                 report.fail(error["source"], RuntimeError(error["error"]))
@@ -143,6 +213,8 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
                     pdfs = sorted(directory.rglob("*.pdf"))
                 report.data["discovered_pdfs"] = len(pdfs)
                 for path in pdfs[:limit or None]:
+                    if not budget_available():
+                        break
                     source = f"pdf://{alias}/{path.relative_to(directory)}"
                     previous = state.data["documents"].get(source, {})
                     body = path.read_bytes()
@@ -179,22 +251,17 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
                                 report.data["deleted"] += 1
                             else:
                                 state.record(source, {**previous, "missing_since": missing_since})
-                                report.fail(source, SourceRemoved("PDF missing; deletion grace period"))
+                                pending_removal(report, source)
 
             def download(item):
-                source, entry = item
-                previous = state.data["documents"].get(source, {})
-                try:
-                    with session() as http:
-                        path, document = fetch(http, source, previous, cache / generation / alias,
-                                               try_markdown=entry.get("try_markdown", False))
-                    return source, path, document, None
-                except Exception as error:
-                    return source, None, previous, error
+                return download_source(item, state.data['documents'].get(item[0], {}),
+                                       cache / generation / alias, governor, job_id)
 
             # Resume unfinished scans fairly after a deadline or eviction.
-            items = sorted(sources.items(), key=lambda pair: (
-                state.data["documents"].get(pair[0], {}).get("last_attempt", 0), pair[0]))
+            now = time.time()
+            grace = contract.get('deletion_grace_hours', 48) * 3600
+            items = sorted(sources.items(), key=lambda item: source_priority(
+                item, state.data['documents'], now, grace))
             if limit:
                 items = items[:limit]
             batch = []
@@ -202,8 +269,11 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
             # source list to bound queued HTTP work and memory on large corpora.
             with ThreadPoolExecutor(max_workers=4) as pool:
                 for start in range(0, len(items), 32):
+                    if not budget_available():
+                        break
                     for source, path, document, error in pool.map(download, items[start:start + 32]):
                         report.data["checked"] += 1
+                        report.data['reused_checks'] += int(document.pop('_reused_check', False))
                         document = {**document, "last_attempt": time.time()}
                         state.record(source, document)
                         if isinstance(error, SourceRemoved):
@@ -215,8 +285,9 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
                                 report.data["deleted"] += 1
                             else:
                                 state.record(source, {**previous, "missing_since": missing_since})
-                                report.fail(source, error)
+                                pending_removal(report, source)
                         elif error:
+                            state.record(source, {**document, 'last_error': type(error).__name__})
                             report.fail(source, error)
                         elif document.get("ingested_hash") == document["sha256"] and not document.get("deleted"):
                             state.record(source, document)
@@ -230,14 +301,17 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
                     report.write()
                 process_batch(batch, contract, "url", state, report, store)
 
-            if report.data["checked"] == 0:
+            if report.data["checked"] == 0 and not report.data['budget_exhausted']:
                 raise RuntimeError("no sources were checked")
             count = client.query(store.name, filter="", output_fields=["count(*)"],
                                   consistency_level="Strong", timeout=60)[0]["count(*)"]
             if count < collection.get("minimum_records", 1):
                 raise RuntimeError("collection does not meet its minimum record count")
             report.data["record_count"] = count
-            report.data["state"] = "failed" if report.data["failure_count"] else "partial" if limit else "complete"
+            report.data["state"] = ("partial" if report.data['budget_exhausted'] else
+                                     "failed" if report.data["failure_count"] else
+                                     "partial" if limit else
+                                     "pending_removals" if report.data["pending_removals"] else "complete")
             if report.data["state"] == "complete":
                 state.data["last_success"] = time.time()
                 report.data["last_success"] = state.data["last_success"]
@@ -253,7 +327,7 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
                 client.close()
         print(json.dumps({k: v for k, v in report.data.items() if k != "failures"}), flush=True)
         if report.data["state"] == "failed":
-            raise RuntimeError(f"refresh has {report.data['failure_count']} unresolved failures")
+            raise RefreshFailed(f"refresh has {report.data['failure_count']} unresolved failures")
         return report.data
 
 
@@ -263,10 +337,16 @@ def main() -> None:
     parser.add_argument("--collection", required=True)
     parser.add_argument("--limit", type=int, default=0, help="bounded validation; never marks a collection fresh")
     args = parser.parse_args()
-    run(json.loads(Path(args.contract).read_text()), args.collection,
-        Path(os.getenv("REFRESH_STATE_ROOT", "/manifests/refresh")),
-        Path(os.getenv("REFRESH_CACHE_ROOT", "/workspace/urls/refresh")),
-        Path(os.getenv("PDF_BASE_PATH", "/workspace/pdf-server")), limit=args.limit)
+    try:
+        run(json.loads(Path(args.contract).read_text()), args.collection,
+            Path(os.getenv("REFRESH_STATE_ROOT", "/manifests/refresh")),
+            Path(os.getenv("REFRESH_CACHE_ROOT", "/workspace/urls/refresh")),
+            Path(os.getenv("PDF_BASE_PATH", "/workspace/pdf-server")), limit=args.limit,
+            budget_seconds=float(os.getenv('REFRESH_RUN_BUDGET_SECONDS', '75600')))
+    except RefreshFailed as error:
+        print(json.dumps({'event': 'refresh_failed', 'error': str(error),
+                          'collection': args.collection}), flush=True)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

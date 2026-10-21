@@ -101,6 +101,12 @@ spec:
           labels: {severity: critical}
           annotations:
             summary: 'Collection {{ "{{ $labels.collection }}" }} refresh worker stopped heartbeating'
+        - alert: DaedalusRefreshBackingOff
+          expr: daedalus_refresh_http_backoff_until - time() > 5
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: 'Collection {{ "{{ $labels.collection }}" }} refresh is waiting for a remote host cooldown'
         - alert: DaedalusRefreshSuspended
           expr: kube_cronjob_spec_suspend{namespace="{{ .Release.Namespace }}",cronjob=~"url-ingest-.*"} == 1
           for: 30m

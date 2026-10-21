@@ -1,6 +1,9 @@
 {{- if lt (int .Values.ingestion.globalCapacity) 1 }}
 {{- fail "ingestion.globalCapacity must be at least 1" }}
 {{- end }}
+{{- if or (lt (int .Values.ingestion.runBudgetSeconds) 1) (ge (int .Values.ingestion.runBudgetSeconds) (int .Values.schedules.activeDeadlineSeconds)) }}
+{{- fail "ingestion.runBudgetSeconds must be positive and shorter than activeDeadlineSeconds" }}
+{{- end }}
 {{- range $collectionName, $collection := .Values.collections }}
 apiVersion: batch/v1
 kind: CronJob
@@ -63,9 +66,12 @@ spec:
                 - {name: PYTHONUNBUFFERED, value: "1"}
                 - {name: HF_HOME, value: /tmp/nv-ingest/huggingface}
                 - {name: GLOBAL_INGEST_CAPACITY, value: {{ $.Values.ingestion.globalCapacity | quote }}}
+                - {name: REFRESH_RUN_BUDGET_SECONDS, value: {{ $.Values.ingestion.runBudgetSeconds | quote }}}
                 - {name: EMBEDDING_NIM_ENDPOINT, value: {{ $.Values.endpoints.embedding | quote }}}
                 - name: POD_NAME
                   valueFrom: {fieldRef: {fieldPath: metadata.name}}
+                - name: JOB_NAME
+                  valueFrom: {fieldRef: {fieldPath: "metadata.labels['batch.kubernetes.io/job-name']"}}
                 - {name: NV_INGEST_MESSAGE_HOST, value: {{ $.Values.endpoints.nvIngestHost | quote }}}
                 - {name: NV_INGEST_MESSAGE_PORT, value: {{ $.Values.endpoints.nvIngestPort | quote }}}
                 - {name: MILVUS_URI, value: {{ $.Values.endpoints.milvusUri | quote }}}

@@ -41,6 +41,7 @@ def render() -> dict:
             "schedule": item["schedule"],
             "freshness_maximum_age_hours": item["freshnessMaximumAgeHours"],
             "minimum_records": item["minimumRecords"],
+            "http_min_interval_seconds": settings.get("httpMinIntervalSeconds", 0.5),
         }
     return result
 

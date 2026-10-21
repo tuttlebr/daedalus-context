@@ -19,11 +19,12 @@ class SourceRemoved(Exception):
     pass
 
 
-def session() -> requests.Session:
-    client = requests.Session()
+def session(governor=None) -> requests.Session:
+    from refresh_http import PacedSession
+    client = PacedSession(governor) if governor else requests.Session()
     client.headers["User-Agent"] = "DaedalusContextRefresh/2.0"
-    retry = Retry(total=3, backoff_factor=1, status_forcelist=[408, 429, 500, 502, 503, 504],
-                  allowed_methods=["GET"], respect_retry_after_header=True)
+    retry = Retry(total=3, backoff_factor=1, status_forcelist=[408, 500, 502, 504],
+                  allowed_methods=["GET"], respect_retry_after_header=False)
     client.mount("https://", HTTPAdapter(max_retries=retry))
     client.mount("http://", HTTPAdapter(max_retries=retry))
     return client

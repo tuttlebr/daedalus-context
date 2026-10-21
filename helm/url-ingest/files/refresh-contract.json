@@ -7,6 +7,7 @@
   "collections": {
     "kubernetes": {
       "freshness_maximum_age_hours": 36,
+      "http_min_interval_seconds": 0.5,
       "minimum_records": 1,
       "pdfs": true,
       "schedule": "0 3 * * *",
@@ -10479,6 +10480,7 @@
     },
     "mentalhealth": {
       "freshness_maximum_age_hours": 36,
+      "http_min_interval_seconds": 0.5,
       "minimum_records": 1,
       "pdfs": true,
       "schedule": "0 6 * * *",
@@ -10486,6 +10488,7 @@
     },
     "nvidia": {
       "freshness_maximum_age_hours": 36,
+      "http_min_interval_seconds": 0.1,
       "minimum_records": 1,
       "pdfs": true,
       "schedule": "0 2 * * *",
@@ -10536,6 +10539,7 @@
     },
     "semianalysis": {
       "freshness_maximum_age_hours": 36,
+      "http_min_interval_seconds": 5,
       "minimum_records": 1,
       "pdfs": true,
       "schedule": "0 5 * * *",
@@ -10550,6 +10554,7 @@
     },
     "vetpartner": {
       "freshness_maximum_age_hours": 36,
+      "http_min_interval_seconds": 0.5,
       "minimum_records": 1,
       "pdfs": false,
       "schedule": "0 4 * * *",

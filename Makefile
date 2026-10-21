@@ -1047,7 +1047,7 @@ validate-helm: ## [read-only local] Validate topology contracts and all eight He
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(RETRIEVER_CHART)/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-	  -s "$(ROOT_DIR)/url-ingest/tests" -p test_refresh.py >/dev/null
+	  -s "$(ROOT_DIR)/url-ingest/tests" -p 'test_refresh*.py' >/dev/null
 	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null
 	@for chart in "$(MILVUS_CHART)" "$(RETRIEVER_CHART)" "$(NV_INGEST_CHART)" \
 	  "$(PDF_SERVER_CHART)" "$(URL_INGEST_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \

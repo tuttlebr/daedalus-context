@@ -44,7 +44,7 @@ components:
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     images:
       crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
-      runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.0.5
+      runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.1
   k8s-mcp:
     source: helm/k8s-mcp-server
     sourceRevision: 61528b15ccc36507e28a706fbbd34de5ef8b88a3

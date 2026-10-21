@@ -39,12 +39,19 @@ def atomic_json(path: Path, value: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
+class CollectionBusy(BlockingIOError):
+    """Another worker owns this collection; this attempt must not change it."""
+
+
 @contextlib.contextmanager
 def collection_lock(root: Path, collection: str):
     root.mkdir(parents=True, exist_ok=True)
     # Keep the lock inode permanently. Unlinking it permits two independent locks.
     with (root / f"{collection}.lock").open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise CollectionBusy(f"another refresh owns {collection}") from error
         try:
             yield
         finally:
@@ -108,7 +115,8 @@ class RunReport:
         self.data = {"run_id": run_id, "collection": collection, "fingerprint": fingerprint,
                      "started_at": time.time(), "updated_at": time.time(), "state": "running",
                      "checked": 0, "unchanged": 0, "updated": 0, "deleted": 0,
-                     "failures": [], "failure_count": 0, "last_success": 0}
+                     "failures": [], "failure_count": 0, "pending_removals": 0,
+                     "reused_checks": 0, "last_success": 0}
         self.failures_path = self.path.with_suffix(".failures.jsonl")
         self._last_write = 0
         self.write()
@@ -131,7 +139,9 @@ class RunReport:
         self.data["failure_count"] += 1
         if len(self.data["failures"]) < 100:
             self.data["failures"].append(entry)
-        self.write()
+        # The next request may wait in host backoff for minutes. Publish this
+        # failure now rather than leaving a healthy-looking throttled report.
+        self.write(force=True)
 
 
 @contextlib.contextmanager
