@@ -7,7 +7,7 @@ retrieval, ingestion, and infrastructure tools to
 Kubernetes is the only supported deployment runtime. Use the root `Makefile`
 for deployment, updates, health checks, and data operations. The root
 `docker-compose.yaml` is an image specification used to validate, build, and
-publish the five locally maintained images. It is not a second deployment
+publish the locally maintained images. It is not a second deployment
 path.
 
 ## Start Here
@@ -66,7 +66,7 @@ make health-stack
 | Check workstation, configuration, context, and cluster access | `make doctor` | Read-only cluster access |
 | Inspect effective non-secret settings | `make show-config` | Read-only local output |
 | Validate the image specification | `make images-validate` | Read-only local validation |
-| Build the five local images | `make images-build` | Writes local image state |
+| Build the local images | `make images-build` | Writes local image state |
 | Build and publish a versioned image release | `make images-publish` | Writes local image and remote registry state |
 | Run source tests and renders | `make validate-local` | Read-only validation plus disposable build output |
 | Validate all eight chart contracts | `make validate-helm` | Read-only local Helm lint and render |
@@ -205,8 +205,9 @@ for:
 - Kubernetes MCP;
 - UniFi MCP;
 - PDF server;
-- URL crawler; and
-- the URL-ingest NV-Ingest task runner.
+- URL crawler;
+- the URL-ingest NV-Ingest task runner; and
+- the local Nemotron document parser.
 
 It does not build the Kubernetes-only Milvus, retriever, or distributed
 NV-Ingest control planes.
@@ -225,9 +226,10 @@ tag in `.env`:
 make images-publish
 ```
 
-This builds and pushes all five images. Its final output contains the
-`K8S_MCP_IMAGE`, `UNIFI_MCP_IMAGE`, `PDF_SERVER_IMAGE`, `URL_INGEST_IMAGE`, and
-`URL_INGEST_RUNNER_IMAGE` assignments used by Kubernetes deployment.
+This builds and pushes all local images. Its final output contains the
+`K8S_MCP_IMAGE`, `UNIFI_MCP_IMAGE`, `PDF_SERVER_IMAGE`, `URL_INGEST_IMAGE`,
+`URL_INGEST_RUNNER_IMAGE`, and `NV_INGEST_PARSER_IMAGE` assignments used by
+Kubernetes deployment.
 
 Print the assignments without rebuilding or pushing:
 

@@ -1,8 +1,10 @@
 # Daedalus NV-Ingest chart
 
 This wrapper pins NVIDIA NV-Ingest, keeps credentials outside Helm, and adds
-the API disruption budget. The authenticated dependency and the reviewed
-post-renderer are required:
+the API disruption budget and local Nemotron Parse inference.
+[values.yaml](values.yaml) defines parser placement and memory. Document
+extraction uses the [local parser](../../nv-ingest/local-parser/README.md).
+The authenticated dependency and the reviewed post-renderer are required:
 
 ```sh
 helm dependency build helm/nv-ingest \

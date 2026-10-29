@@ -13,6 +13,15 @@ nv-ingest:
     type: ClusterIP
     port: 7670
   extraEnvVarsSecret: nv-ingest-object-store
+  extraVolumes:
+    local-pdfium:
+      configMap:
+        name: nv-ingest-local-parser
+    local-nemotron:
+      configMap:
+        name: nv-ingest-local-parser
+  # The upstream extraVolumeMounts template emits invalid indentation in 26.3.
+  # The root post-renderer adds the two corresponding mounts.
   ngcImagePullSecret:
     create: false
     name: ngc-secret
@@ -20,6 +29,16 @@ nv-ingest:
     create: false
   milvusDeployed: false
   envVars:
+    LOCAL_DOCUMENT_PARSE_ENDPOINT: http://nv-ingest-parser:8000
+    LOCAL_DOCUMENT_PARSE_REVISION: "0.1.0"
+    # Upstream stage schemas require nonempty addresses for replaced engines.
+    # These local-only, unimplemented paths fail closed if a legacy task uses them.
+    OCR_HTTP_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
+    YOLOX_HTTP_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
+    YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
+    YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
+    VLM_CAPTION_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
+    NEMOTRON_PARSE_HTTP_ENDPOINT: http://nv-ingest-parser:8000/legacy-disabled
     EMBEDDING_NIM_ENDPOINT: http://nemotron-retriever-embedder:8000/v1
     EMBEDDING_NIM_MODEL_NAME: nvidia/Nemotron-3.5-Embed-1B-NVFP4
     MILVUS_ENDPOINT: http://milvus:19530
@@ -82,3 +101,17 @@ nv-ingest:
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
+
+localParser:
+  image: daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
+  nodeSelector:
+    kubernetes.io/hostname: daedalus-04
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+      nvidia.com/gpu: "1"
+    limits:
+      cpu: "8"
+      memory: 16Gi
+      nvidia.com/gpu: "1"

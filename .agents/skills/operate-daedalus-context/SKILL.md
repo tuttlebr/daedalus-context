@@ -50,6 +50,10 @@ part of the task; do not adapt the runtime to an outdated instruction.
   `make run-ingest` only when the user requested the corresponding data write.
 - Generate Daedalus consumer settings with `make render-agent-env`. Keep
   secrets in the approved secret-management path.
+- For local document extraction changes or NV-Ingest upgrades, follow the
+  [parser contract and compatibility checks](../../../nv-ingest/local-parser/README.md).
+  Run the parser image tests and engine tests in the pinned NV-Ingest runtime;
+  verify extracted content through the actual consumer path, beyond readiness.
 
 Use `COMPONENTS` to limit scope. Include selected dependencies or prove that
 existing dependencies are healthy before operating on a dependent alone.

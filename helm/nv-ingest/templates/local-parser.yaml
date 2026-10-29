@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nv-ingest-local-parser
+data:
+  local_pdf.py: |
+{{ .Files.Get "files/local_pdf.py" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nv-ingest-parser
+  labels:
+    app.kubernetes.io/name: nv-ingest-parser
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nv-ingest-parser
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nv-ingest-parser
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+{{ toYaml .Values.localParser.nodeSelector | indent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: parser
+          image: {{ .Values.localParser.image | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+{{ toYaml .Values.localParser.resources | indent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 4Gi}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nv-ingest-parser
+  labels:
+    app.kubernetes.io/name: nv-ingest-parser
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nv-ingest-parser
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

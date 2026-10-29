@@ -28,6 +28,22 @@ awk '
       } else {
         deployment_count++
       }
+
+      # NV-Ingest 26.3 emits malformed YAML for extraVolumeMounts. Add the
+      # mounts here only when the owned wrapper supplies the matching volumes.
+      if (document ~ /name:[[:space:]]*local-pdfium[[:space:]]*\n/) {
+        mounts = "\n          volumeMounts:\n"
+        mounts = mounts "            - name: local-pdfium\n"
+        mounts = mounts "              mountPath: /opt/nv_ingest_runtime/lib/python3.12/site-packages/nv_ingest_api/internal/extract/pdf/engines/pdfium.py\n"
+        mounts = mounts "              subPath: local_pdf.py\n              readOnly: true\n"
+        mounts = mounts "            - name: local-nemotron\n"
+        mounts = mounts "              mountPath: /opt/nv_ingest_runtime/lib/python3.12/site-packages/nv_ingest_api/internal/extract/pdf/engines/nemotron_parse.py\n"
+        mounts = mounts "              subPath: local_pdf.py\n              readOnly: true\n"
+        if (!sub(/\n          volumeMounts:[[:space:]]*\n/, mounts, document)) {
+          print "Unable to mount the local document extraction engine." > "/dev/stderr"
+          invalid = 1
+        }
+      }
     }
 
     if (document ~ /\nkind:[[:space:]]*Secret[[:space:]]*\n/ &&

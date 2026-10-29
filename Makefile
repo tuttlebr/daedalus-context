@@ -14,7 +14,7 @@ HELM ?= helm
 JQ ?= jq
 COMPOSE ?= docker compose
 ENV_FILE ?= $(ROOT_DIR)/.env
-IMAGE_BUILD_SERVICES := k8s-mcp-server-read-only unifi-network-mcp-server pdf-server url-ingest nv-ingest-ms-tasks
+IMAGE_BUILD_SERVICES := k8s-mcp-server-read-only unifi-network-mcp-server pdf-server url-ingest nv-ingest-ms-tasks nv-ingest-parser
 DAEDALUS_CONTEXT_IMAGE_VERSION ?= 0.1.0
 EXPECTED_CONTEXT ?=
 ROLLOUT_TIMEOUT ?= 20m
@@ -114,6 +114,8 @@ VLM_CAPTION_MODEL_NAME ?= nvidia/NVIDIA-Nemotron-Nano-12B-v2
 NEMOTRON_PARSE_HTTP_ENDPOINT ?=
 NEMOTRON_PARSE_INFER_PROTOCOL ?= http
 NEMOTRON_PARSE_MODEL_NAME ?= nvidia/nemotron-parse
+NV_INGEST_PARSER_IMAGE ?= daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
+LOCAL_DOCUMENT_PARSE_ENDPOINT ?= http://nv-ingest-parser.$(DAEDALUS_NAMESPACE).svc.cluster.local:8000
 MINIO_BUCKET ?= nv-ingest
 URL_INGEST_SOURCE_NODE ?= daedalus-01
 NVIDIA_INGEST_SHARDS ?= 8
@@ -295,7 +297,7 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 
 ##@ Image lifecycle
 
-images-validate: ## [read-only local] Validate all five versioned image specifications.
+images-validate: ## [read-only local] Validate all versioned image specifications.
 	@command -v docker >/dev/null || { echo 'Missing required command: docker' >&2; exit 1; }
 	@$(COMPOSE) version >/dev/null
 	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
@@ -329,7 +331,8 @@ images-release-refs: images-validate ## [read-only local] Print Kubernetes image
 	resolve_image UNIFI_MCP_IMAGE unifi-network-mcp-server; \
 	resolve_image PDF_SERVER_IMAGE pdf-server; \
 	resolve_image URL_INGEST_IMAGE url-ingest; \
-	resolve_image URL_INGEST_RUNNER_IMAGE nv-ingest-ms-tasks
+	resolve_image URL_INGEST_RUNNER_IMAGE nv-ingest-ms-tasks; \
+	resolve_image NV_INGEST_PARSER_IMAGE nv-ingest-parser
 
 images-publish: images-push images-release-refs ## [registry write] Build, push, and print all release references.
 
@@ -537,37 +540,32 @@ deploy-nv-ingest:
 	@[[ -n "$(EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI)" ]] || { \
 	  echo 'IMAGE_STORAGE_URI is required for NV-Ingest.' >&2; exit 1; \
 	}
-	@for variable in OCR_HTTP_ENDPOINT YOLOX_HTTP_ENDPOINT \
-	  YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT \
-	  VLM_CAPTION_ENDPOINT NEMOTRON_PARSE_HTTP_ENDPOINT; do \
-	  [[ -n "$${!variable}" ]] || { \
-	    echo "$$variable is required for NV-Ingest; no in-cluster fallback is deployed." >&2; \
-	    exit 1; \
-	  }; \
-	done
 	@$(HELM) upgrade --install "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	  --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" \
 	  --set-string nv-ingest.image.tag="$(NV_INGEST_VERSION)" \
 	  --set nv-ingest.replicaCount="$(NV_INGEST_REPLICA_COUNT)" \
+	  --set-string localParser.image="$(NV_INGEST_PARSER_IMAGE)" \
+	  --set-string nv-ingest.envVars.LOCAL_DOCUMENT_PARSE_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.LOCAL_DOCUMENT_PARSE_REVISION="$$(sha256sum '$(NV_INGEST_CHART)/files/local_pdf.py' | cut -d' ' -f1)" \
 	  --set-string nv-ingest.envVars.MILVUS_ENDPOINT="$(MILVUS_ENDPOINT)" \
 	  --set-string nv-ingest.envVars.MINIO_INTERNAL_ADDRESS="$(MINIO_ENDPOINT)" \
 	  --set-string nv-ingest.envVars.MINIO_PUBLIC_ADDRESS="$(MINIO_ENDPOINT)" \
 	  --set-string nv-ingest.envVars.MINIO_BUCKET="$(MINIO_BUCKET)" \
 	  --set-string nv-ingest.envVars.EMBEDDING_NIM_ENDPOINT="$(EMBEDDING_NIM_ENDPOINT)" \
 	  --set-string nv-ingest.envVars.EMBEDDING_NIM_MODEL_NAME="$(EMBEDDING_NIM_MODEL_NAME)" \
-	  --set-string nv-ingest.envVars.OCR_HTTP_ENDPOINT="$(OCR_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.OCR_HTTP_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.OCR_INFER_PROTOCOL="$(OCR_INFER_PROTOCOL)" \
 	  --set-string nv-ingest.envVars.OCR_MODEL_NAME="$(OCR_MODEL_NAME)" \
-	  --set-string nv-ingest.envVars.YOLOX_HTTP_ENDPOINT="$(YOLOX_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_HTTP_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.YOLOX_INFER_PROTOCOL="$(YOLOX_INFER_PROTOCOL)" \
-	  --set-string nv-ingest.envVars.YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT="$(YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL="$(YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL)" \
-	  --set-string nv-ingest.envVars.YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT="$(YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL="$(YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL)" \
-	  --set-string nv-ingest.envVars.VLM_CAPTION_ENDPOINT="$(VLM_CAPTION_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.VLM_CAPTION_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.VLM_CAPTION_MODEL_NAME="$(VLM_CAPTION_MODEL_NAME)" \
-	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_HTTP_ENDPOINT="$(NEMOTRON_PARSE_HTTP_ENDPOINT)" \
+	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_HTTP_ENDPOINT="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled" \
 	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_INFER_PROTOCOL="$(NEMOTRON_PARSE_INFER_PROTOCOL)" \
 	  --set-string nv-ingest.envVars.NEMOTRON_PARSE_MODEL_NAME="$(NEMOTRON_PARSE_MODEL_NAME)" \
 	  --set-string nv-ingest.envVars.IMAGE_STORAGE_URI="$(EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI)" \
@@ -928,6 +926,12 @@ health-provider-nv-ingest:
 
 health-dependencies-nv-ingest:
 	@$(KUBECTL) get --raw "/api/v1/namespaces/$(NV_INGEST_NAMESPACE)/services/http:$(NV_INGEST_SERVICE):7670/proxy/v1/health/ready" >/dev/null
+	@$(KUBECTL) get --raw "/api/v1/namespaces/$(NV_INGEST_NAMESPACE)/services/http:nv-ingest-parser:8000/proxy/readyz" >/dev/null
+	@for pod in $$($(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" get pods \
+	  --selector="app.kubernetes.io/name=nv-ingest,app.kubernetes.io/instance=$(NV_INGEST_RELEASE)" -o name); do \
+	  $(KUBECTL) --namespace="$(NV_INGEST_NAMESPACE)" exec "$$pod" -- python3 -c \
+	    'import os, urllib.request; urllib.request.urlopen(os.environ["LOCAL_DOCUMENT_PARSE_ENDPOINT"].rstrip("/") + "/readyz", timeout=10).close()'; \
+	done
 
 health-integration-nv-ingest:
 	$(call consumer_http,$(NV_INGEST_ENDPOINT)/v1/health/ready)
@@ -1116,6 +1120,7 @@ validate-local: validate-helm ## [read-only local] Run full source, image, and c
 	  "$(ROOT_DIR)/url-ingest/k8s/render-manual-job.py"
 	@cd "$(ROOT_DIR)/url-ingest" && python3 -m unittest discover -s tests >/dev/null
 	@cd "$(ROOT_DIR)/nv-ingest" && bash tests/test-deploy.sh >/dev/null
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$(ROOT_DIR)/nv-ingest/tests" >/dev/null
 	@cd "$(ROOT_DIR)/pdf-server" && \
 	  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests >/dev/null
 	@$(MAKE) --no-print-directory -C "$(ROOT_DIR)/k8s-multicluster-mcp" check >/dev/null

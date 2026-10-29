@@ -23,7 +23,26 @@ def make_targets() -> set[str]:
 
 
 class RootInterfaceTests(unittest.TestCase):
-    def test_nv_ingest_deploy_forwards_external_extraction_dependencies(self) -> None:
+    def test_local_parser_mounts_are_in_the_rendered_nv_ingest_deployment(self) -> None:
+        import shutil
+
+        if not shutil.which("helm"):
+            self.skipTest("helm is required for the rendered deployment contract")
+        rendered = subprocess.check_output(
+            ["helm", "template", "nv-ingest", str(ROOT / "helm/nv-ingest"),
+             "--namespace", "daedalus", "--post-renderer", str(ROOT / "nv-ingest/helm-post-renderer.sh")],
+            text=True,
+        )
+        resources = [d for d in yaml.safe_load_all(rendered) if d]
+        deployment = next(d for d in resources if d["kind"] == "Deployment" and d["metadata"]["name"] == "nv-ingest")
+        mounts = deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        for engine in ["pdfium", "nemotron_parse"]:
+            mount = next(m for m in mounts if m["mountPath"].endswith(f"/engines/{engine}.py"))
+            self.assertEqual(mount["subPath"], "local_pdf.py")
+            self.assertTrue(mount["readOnly"])
+        self.assertTrue(any(d["kind"] == "Deployment" and d["metadata"]["name"] == "nv-ingest-parser" for d in resources))
+
+    def test_nv_ingest_deploy_disables_external_extraction_dependencies(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         example = (ROOT / ".env.example").read_text(encoding="utf-8")
         required = (
@@ -35,7 +54,10 @@ class RootInterfaceTests(unittest.TestCase):
             "NEMOTRON_PARSE_HTTP_ENDPOINT",
         )
         for variable in required:
-            self.assertIn(f"nv-ingest.envVars.{variable}", makefile)
+            self.assertIn(
+                f'nv-ingest.envVars.{variable}="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled"',
+                makefile,
+            )
             self.assertRegex(example, rf"(?m)^{re.escape(variable)}=.*$")
 
         url_ingest = yaml.safe_load(

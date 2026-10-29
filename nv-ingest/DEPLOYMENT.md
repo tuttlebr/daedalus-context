@@ -5,18 +5,22 @@ Daedalus retrieval stack. It deploys the service only; URL and PDF population
 is owned by `../url-ingest`.
 
 The production profile pins both the Helm chart and application image to
-`26.3.0`, runs three API replicas, prefers spreading those replicas across
+`26.3.0`, runs two API replicas, prefers spreading those replicas across
 hosts, and exposes the service as an in-cluster `ClusterIP` through the root
 Makefile. Milvus and MinIO remain external to the NV-Ingest chart.
 
 ## Configure and deploy
 
-Copy `.env.example` to `.env`, fill the NGC and remaining extraction endpoint
-settings, and do not commit the resulting file. The embedding defaults point
-to the `nemotron-retriever` vLLM Service in `daedalus-retriever`; deploy that
-chart before NV-Ingest. Its compatibility adapter translates NV-Ingest's NIM
-embedding payload to the role prefixes required by
-`nvidia/llama-nemotron-embed-vl-1b-v2`.
+Existing Secrets provide NGC pull/API credentials and object-store credentials.
+The chart references them without putting credential values in Helm. Configure
+`IMAGE_STORAGE_URI`, `LOCAL_DOCUMENT_PARSE_ENDPOINT`, and `NV_INGEST_PARSER_IMAGE`.
+PDF extraction uses the local parser deployed by this chart. Keep the embedding model aligned
+with [stack/rag-schema.yaml](../stack/rag-schema.yaml).
+
+Build and publish the parser separately with
+`make images-publish IMAGE_BUILD_SERVICES=nv-ingest-parser`. The image contains
+the pinned model weights and custom model code; inference runs with Hugging Face
+network access disabled. See [local parser](local-parser/README.md) for its contract.
 
 The recommended object-store configuration copies credentials from the
 authoritative Milvus MinIO Secret:
@@ -39,7 +43,9 @@ From the workspace root, use:
 
 ```bash
 make deploy COMPONENTS="retriever nv-ingest"
-make healthcheck COMPONENTS="retriever nv-ingest"
+make health-provider COMPONENTS=nv-ingest
+make health-dependencies COMPONENTS=nv-ingest
+make health-integration COMPONENTS=nv-ingest
 ```
 
 For a direct deployment from this directory, use `./deploy.sh`. The script
@@ -55,17 +61,11 @@ root `make seed-data` workflow.
 
 ## Readiness semantics
 
-Leave `COMPONENTS_TO_READY_CHECK` empty when OCR, YOLOX, VLM, or parser
-endpoints are authenticated external NVCF services. Their unauthenticated
-health responses do not necessarily implement the JSON contract expected by
-NV-Ingest's component readiness parser. In that profile, use the NV-Ingest
-pipeline readiness probe plus the authenticated seed preflight and real
-ingestion requests as the operational signal.
-
-Set `COMPONENTS_TO_READY_CHECK=ALL` only when every configured dependency
-exposes compatible readiness JSON without additional authentication. Enabling
-`ALL` against incompatible external health endpoints can keep an otherwise
-usable service unready.
+The local parser exposes `/readyz` and `/healthz` on its internal Service. Keep
+`nv-ingest.envVars.COMPONENTS_TO_READY_CHECK` empty: the legacy NIM checks do not
+describe this parser. Verify an extraction through NV-Ingest as well as the
+parser probe. Inference failures propagate to the job; there is no remote-model
+or native-text fallback.
 
 ## Safe rollout guard
 

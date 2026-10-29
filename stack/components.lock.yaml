@@ -35,6 +35,9 @@ components:
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chartVersion: 26.3.0
     image: nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
+    parserImage: daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
+    parserModel: nvidia/Nemotron-3.5-Parse
+    parserModelRevision: 4035ffb1d8f8bafcdb867dfaf6f7514f101464f9
   pdf-server:
     source: helm/pdf-server
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a

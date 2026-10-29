@@ -92,8 +92,8 @@ milvus:
             component: querynode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 250m, memory: 7168Mi}
-      limits: {cpu: "4", memory: 12Gi}
+      requests: {cpu: 250m, memory: 12Gi}
+      limits: {cpu: "4", memory: 24Gi}
   dataNode:
     replicas: 3
     topologySpreadConstraints:
@@ -124,8 +124,8 @@ milvus:
             component: streamingnode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 100m, memory: 512Mi}
-      limits: {cpu: "2", memory: 6Gi}
+      requests: {cpu: 100m, memory: 8Gi}
+      limits: {cpu: "2", memory: 16Gi}
   mixCoordinator:
     replicas: 2
     activeStandby:
