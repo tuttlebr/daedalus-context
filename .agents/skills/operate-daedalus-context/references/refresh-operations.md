@@ -1,22 +1,21 @@
 # Refresh Operations
 
 Read this for URL/PDF refresh, stale collections, ingestion recovery, or embedding
-migrations. Resolve links relative to this file; run commands at the repository
+contract changes. Resolve links relative to this file; run commands at the repository
 root using the context guard in [SKILL.md](../SKILL.md).
 
 ## Establish the Current Contract
 
 - [README: continuous refresh](../../../../README.md#continuous-refresh-and-embedding-generations)
-  describes ownership and the supported migration procedure. `nim-milvus-ms`
-  is a legacy wrapper, not the refresh scheduler. Milvus stores vectors;
+  describes ownership and generation compatibility. Milvus stores vectors;
   `url-ingest` schedules and reconciles sources; NV-Ingest extracts content;
   the refresh worker chunks, embeds, and writes it. The retriever serves both
   refresh workers and daedalus-agent.
 - [Retrieval schema](../../../../stack/rag-schema.yaml) and
   [collection contract](../../../../stack/collections.yaml) own the model,
   vector space, collection names, schedules, and freshness limits.
-- [Chart values](../../../../helm/url-ingest/values.yaml) and
-  [CronJob template](../../../../helm/url-ingest/templates/cronjobs.yaml) own
+- [Chart values](../../../../url-ingest/chart/values.yaml) and
+  [CronJob template](../../../../url-ingest/chart/templates/cronjobs.yaml) own
   pacing, retries, work budgets, hard deadlines, and schedule suspension.
 - [Contract renderer](../../../../scripts/render_refresh_contract.py) combines
   those inputs with source lists. Update authoritative inputs and regenerate
@@ -81,7 +80,9 @@ For runner changes, exercise the relevant tests in
 Then inspect an actual affected path: e.g. overlap leaves the owner intact,
 retry reuses checks, or a formerly failing source reaches verified Milvus rows.
 Use `make refresh-verify` only with authorization to create its verification Job;
-it checks embedding/retrieval data without ingesting new documents. Follow with
+it checks embedding/retrieval data without ingesting new documents. Both refresh
+and verification submission return before completion. Inspect the created Job's
+terminal state, logs, and durable reports to establish the outcome. Follow with
 the applicable Daedalus integration check when consumer behavior changed.
 
 Preserve the safety invariants in [refresh.py](../../../../url-ingest/refresh.py)
@@ -91,8 +92,7 @@ chunks before old chunks are removed. A failure must retain the previous usable
 data and remain visible; do not equate Job completion or unchanged record counts
 with a successful full refresh.
 
-For embedding migrations, follow the README's generation and promotion workflow
-with explicit data-migration authorization. Verify consumer database support,
-embedding contract, index metric, and reranker score semantics together. Keep
-the previous generation and serving configuration available for rollback; stop
-refresh writers for cutover and never mix vector spaces.
+For embedding contract changes, verify consumer database support, embedding
+identity, index metric, and reranker score semantics together. Data changes
+require explicit authorization and a recovery plan. Never mix vector spaces or
+discard the active data before replacement retrieval has been verified.

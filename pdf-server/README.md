@@ -1,49 +1,52 @@
 # Daedalus PDF Corpus Server
 
-This release is the sole owner of the Kubernetes PDF corpus resources:
-ServiceAccount, PVC, nginx ConfigMap, Deployment, Service, PDB, NetworkPolicy,
-and publication Job. URL ingest consumes the `pdf-server-data` claim and
-`pdf-server` Service when deployed in the same namespace; it does not reconcile
-them.
+The [PDF chart](chart/README.md) owns the HTTP service and retained
+corpus PVC in the shared `daedalus` namespace. This component supplies the image
+and publication tooling. URL refresh consumes the `pdf-server-data` claim
+read-only and does not reconcile PDF resources.
 
-The workspace root owns the image release and Kubernetes deployment paths:
+## Deploy and publish
 
-```bash
-cd ..
-make images-build
-COMPONENTS=pdf-server make deploy
-```
-
-The root image specification wraps the versioned `nginx:1.27.4-alpine` base as
-`daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0`. The same SemVer-tagged
-`PDF_SERVER_IMAGE` is used by the Kubernetes deployment.
-
-Use the component wrapper only for focused debugging or recovery:
+Use the [root configuration setup](../README.md#configuration), then run from
+the repository root:
 
 ```bash
-TARGET=kubernetes NAMESPACE=milvus ./deploy.sh
+make deploy COMPONENTS=pdf-server
+make health-provider COMPONENTS=pdf-server
 ```
 
-Publishing is an explicit data mutation:
+The root [image specification](../docker-compose.yaml) and
+[chart values](chart/values.yaml) own the image and service settings.
+Build and publish images through the root image workflow before deployment.
+Use `make render` in this folder for local inspection of the same chart.
+The publication helper `publish-corpus.sh` is invoked by root `make publish-corpus`.
+
+Publishing is a separate data operation. Choose a unique source revision or
+digest as the corpus generation:
 
 ```bash
-TARGET=kubernetes \
-PUBLISH_CORPUS=true \
-CORPUS_GENERATION=<source-revision-or-digest> \
-PDF_SOURCE_NODE=daedalus-01 \
-./deploy.sh
+make publish-corpus CORPUS_GENERATION=corpus-v1
+make refresh-run COLLECTIONS="nvidia mentalhealth"
 ```
 
-The Job copies into `.generations/<generation>`, writes and verifies
-`manifest.sha256`, and atomically switches one `current` generation pointer.
-Stable per-collection links resolve through that pointer, so every collection
-changes generation together. An atomic publish lock prevents concurrent
-writers, and a monotonic fencing token rejects a delayed older Job after a
-newer generation has already won. The publisher refuses to overwrite a legacy
-physical collection directory. Move legacy data into the generation layout
-only during an approved migration with backup and rollback.
+The publication Job copies to `.generations/<generation>`, writes and verifies
+`manifest.sha256`, and atomically switches the `current` pointer. Stable
+per-collection links resolve through that pointer. A publish lock prevents
+concurrent writers; a monotonic fencing token rejects an older delayed Job.
+Existing physical collection directories cannot be overwritten by publication.
 
-The backing RWX store remains an external failure domain until its HA,
-snapshot, and restore contract is proven. Two nginx replicas protect pod and
-voluntary-disruption availability; they do not make a singleton NFS endpoint
-highly available.
+Source paths and the node holding them are configured through
+`PDF_SOURCE_HOST_PATH` and `PDF_SOURCE_NODE`. Do not copy files directly into
+the active PVC. Publication selects the corpus; refresh Jobs separately update
+retrieval data and return from submission before ingestion completes.
+
+The default HTTP path is `http://pdf-server.daedalus.svc.cluster.local/pdfs/`.
+The backing RWX store is a shared failure domain. Multiple HTTP replicas protect
+pod availability but do not make a single NFS appliance highly available.
+
+## Validation
+
+Run `make test` from this directory for publication tests. Use the root
+`make validate-helm` for chart validation and `make validate-local` for executable
+source changes. A successful HTTP probe alone does not verify corpus contents
+or retrieval.

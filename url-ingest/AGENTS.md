@@ -1,32 +1,46 @@
-# Repository Guidelines
+# URL Ingestion Agent Guidance
 
-## Project Structure & Module Organization
+Follow the root [AGENTS.md](../AGENTS.md) and
+[operations skill](../.agents/skills/operate-daedalus-context/SKILL.md).
+[README.md](README.md) describes the current component; the root Makefile owns
+normal deployment and data workflows.
 
-This repository contains a two-stage URL/PDF ingestion pipeline. `src/main.rs` is the Rust `url_ingest` CLI that reads URL lists or sitemaps and writes `.html`/`.md` files. `nv-ingest-ms-tasks.py` is the Python NV-Ingest runner that chunks, embeds, and uploads files to Milvus. `files/` holds source lists, `downloaded_urls/<collection>/` holds crawl output, and `k8s/` contains deployment, PVC, ConfigMap, Secret, CronJob, and seed-job manifests. `Dockerfile`, `Dockerfile.runner`, and `entrypoint-url-ingest.sh` feed the workspace image specification; Kubernetes is the runtime deployment path.
+## Ownership
 
-## Build, Test, and Development Commands
+- `refresh.py` is the deployed URL/PDF reconciler. `refresh_fetch.py`,
+  `refresh_http.py`, `refresh_embedding.py`, `refresh_milvus.py`, and
+  `refresh_state.py` implement discovery, pacing, embeddings, storage, and state.
+- `refresh_monitor.py` serves status and metrics; `refresh_verify.py` verifies
+  query compatibility and retrieval.
+- `src/main.rs` is the standalone Rust crawler. Refresh CronJobs do not run it
+  as an init container.
+- `nv-ingest-ms-tasks.py` supplies extraction/client helpers reused by refresh.
+- `chart/`, `../stack/`, and `../scripts/render_refresh_contract.py`
+  own deployment and rendered contracts. Update those inputs rather than only
+  generated JSON. `files/` contains source lists.
 
-- `cargo build`: compile the Rust CLI for local development.
-- `cargo run -- --input files/k8s_url_links.txt --input-type url --output downloaded_urls/kubernetes --skip-existing`: run a targeted local crawl.
-- `cargo fmt --check`: verify Rust formatting before review.
-- `cargo clippy -- -D warnings`: catch Rust lint issues.
-- `cargo test`: run Rust unit tests; add tests as behavior is introduced.
-- `python3 -m py_compile nv-ingest-ms-tasks.py`: quick syntax check for the Python ingest script.
-- `make -C .. images-build`: build all versioned workspace images.
-- `./deploy.sh --seed-data --run-now`: deploy resources, seed PVCs, and trigger ingest jobs.
+## Invariants
 
-## Coding Style & Naming Conventions
+Preserve one writer per collection, durable resume, deterministic replacements,
+and verification of new rows before removing old rows. Failed replacements
+retain usable data. Partial scans and smoke tests must not mark collections
+fresh. A sitemap omission or inaccessible PDF directory is not deletion proof.
+Keep the consumer and worker in the same embedding space.
 
-Use Rust 2021 idioms and `rustfmt` defaults. Keep CLI flags explicit and compatible with the existing `clap` parser. Python uses 4-space indentation, type hints where practical, module-level constants for defaults, and `logging` for operational messages. Collection names are lowercase and must line up across `files/*_url_links.txt`, `downloaded_urls/<collection>/`, `k8s/cronjob-<collection>.yaml`, and `<collection>.ingested`.
+Use fixtures, temporary state, and fake services for tests. Do not instantiate
+`refresh_state.State` against production files for read-only inspection: it can
+replay and checkpoint journals. Do not start crawls or ingestion to test source
+changes without authorization. Preserve source data and unrelated changes.
 
-## Testing Guidelines
+## Validation
 
-No dedicated test suite is currently checked in. For Rust changes, add focused unit tests near changed functions in `src/main.rs` and run `cargo test`. For crawl behavior, prefer small fixture URL lists or temporary output directories so tests do not mutate downloaded data. For Python changes, at minimum run `py_compile`; integration validation requires NV-Ingest, Milvus, MinIO, and required environment variables.
+From this directory, run `python3 -m unittest discover -s tests -v`. For Rust
+changes, use `cargo fmt --check`, `cargo clippy --locked -- -D warnings`, and
+`cargo test --locked`; `make test` also provides the Docker Rust check stage.
+Run the root validation gates appropriate to the change. Documentation-only
+edits need link and command checks, not live services.
 
-## Commit & Pull Request Guidelines
-
-This checkout has no local Git history, so no project-specific commit convention can be inferred. Use concise imperative commits such as `Add manifest reset handling` or `Update Kubernetes crawl schedule`. Pull requests should describe the affected collection or stage, list validation commands, call out Kubernetes or `.env` changes, and include relevant log snippets.
-
-## Security & Configuration Tips
-
-Treat `.env`, Kubernetes secrets, access tokens, MinIO credentials, and Hugging Face tokens as sensitive. Do not paste secrets into logs, examples, PR descriptions, or manifests. Use `--skip-existing` and conservative `RAYON_NUM_THREADS`/`--delay-ms` settings when testing crawls against external sites.
+Use Rust 2021 idioms and rustfmt. Python uses four-space indentation and
+explicit error handling. Keep secrets out of source, manifests, logs, and test
+fixtures. Keep documentation about current behavior; use Git history for
+completed reviews and migration narratives.

@@ -1,122 +1,66 @@
-# Kubernetes & Helm MCP Server
+# Kubernetes and Helm MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for managing Kubernetes clusters and Helm releases through any MCP-compatible client. Built in Go for low resource overhead, it supports read-only operation by default in Kubernetes, in-cluster or kubeconfig-based authentication, explicit capability gates for dangerous tools, HTTP bearer-token auth, and an **autonomous AI-driven DevOps agent** via [opencode](https://github.com/anomalyco/opencode) integration.
+This Go server exposes Kubernetes and Helm tools through MCP, with stdio, SSE,
+and streamable HTTP transports. The root deployment defaults to authenticated,
+read-only Kubernetes access. Optional write tools and the opencode-backed
+DevOps agent have explicit capability gates.
 
-## Table of Contents
+## Deployment
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Operational Safety Model](#operational-safety-model)
-- [DevOps Agent](#devops-agent)
-- [Agent Skills](#agent-skills)
-- [Tool Reference](#tool-reference)
-- [Deployment](#deployment)
-- [Security](#security)
-- [Development](#development)
-- [License](#license)
-
-## Features
-
-**Kubernetes Operations** — read, write, and explicitly gated dangerous tools covering the full lifecycle of cluster resources:
-
-| Category                   | Capabilities                                                                                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Discovery & Inspection** | List API resources, get/describe/export resources as JSON or YAML, diff resource states, trace ownership chains                                    |
-| **Monitoring**             | Cluster health checks, top pods/nodes by CPU or memory, resource quotas, limit ranges                                                              |
-| **Debugging**              | Pod debug info (conditions + events + logs), service endpoint health, network policy analysis, security context inspection, resource event history |
-| **Mutations**              | Create/update resources from JSON or YAML, delete resources, scale workloads, rollout restarts, manifest dry-run validation, optional exec/kubectl |
-| **DevOps Agent**           | Autonomous AI agent that inspects and, when explicitly permitted, manages cluster workloads using MCP tools, powered by any OpenAI-compatible LLM |
-| **Navigation**             | List namespaces, list available kubeconfig contexts, rollout status                                                                                |
-
-**Helm Operations** — 9 tools for chart lifecycle management:
-
-| Category  | Capabilities                                                           |
-| --------- | ---------------------------------------------------------------------- |
-| **Read**  | List releases, get release details, release history, list repositories |
-| **Write** | Install, upgrade, uninstall, rollback releases, add repositories       |
-
-**Platform** — Flexible resource identifier resolution accepts PascalCase Kind (`Deployment`), lowercase plural (`deployments`), singular (`deployment`), or short names (`deploy`).
-
-## Architecture
-
-```
-src/
-├── main.go              # Server entry point, tool registration, transport setup
-├── tools/
-│   ├── k8s.go           # Kubernetes MCP tool definitions (schemas)
-│   ├── helm.go          # Helm MCP tool definitions (schemas)
-│   └── agent.go         # DevOps agent tool definition
-├── handlers/
-│   ├── k8s.go           # Kubernetes tool handlers (request → response)
-│   ├── helm.go          # Helm tool handlers (request → response)
-│   └── agent.go         # DevOps agent handler
-└── pkg/
-    ├── k8s/
-    │   └── client.go    # Kubernetes client (dynamic, discovery, metrics, typed)
-    ├── helm/
-    │   └── client.go    # Helm client (install, upgrade, release management)
-    └── agent/
-        └── agent.go     # OpenCode agent orchestration (subprocess, config, parsing)
-```
-
-The server uses a **dynamic Kubernetes client** with a cached GVR (GroupVersionResource) resolver backed by the discovery API, so it works with any resource type — including CRDs — without hardcoded mappings.
-
-## Quick Start
-
-### Prerequisites
-
-- Go 1.24+ (for building from source)
-- Access to a Kubernetes cluster with a valid kubeconfig
-- [metrics-server](https://github.com/kubernetes-sigs/metrics-server) installed for CPU/memory metrics tools
-
-### Build from Source
+Use the [root configuration setup](../README.md#configuration), then run from
+the repository root:
 
 ```bash
-cd src
-go mod download
-CGO_ENABLED=0 go build -ldflags="-w -s" -o k8s-mcp-server main.go
+make deploy COMPONENTS=k8s-mcp
+make health-provider COMPONENTS=k8s-mcp
+make health-dependencies COMPONENTS=k8s-mcp
+make health-integration COMPONENTS=k8s-mcp
 ```
 
-### Run Locally
+The [active Helm chart](chart/README.md) deploys in `daedalus`.
+It uses in-cluster ServiceAccount credentials. By default, the chart enables
+`SERVER_READ_ONLY`, `SERVER_NO_HELM`, and `MCP_REQUIRE_AUTH`, with observer RBAC
+that excludes Secret data. Persist `K8S_MCP_READ_ONLY=false` and
+`K8S_MCP_NO_HELM=false` in the root `.env` to enable Kubernetes and Helm writes
+with cluster-wide resource CRUD permissions. Helm also requires Secret access
+for release state. The independent `K8S_MCP_ENABLE_EXEC`,
+`K8S_MCP_ENABLE_KUBECTL`, and `K8S_MCP_ENABLE_AGENT_WRITE` settings default to
+`false`; set them to `true` to expose those capabilities in write-enabled mode.
+The [chart documentation](chart/README.md) describes the RBAC
+and rollback behavior. HTTP authentication remains mandatory in every mode.
+
+The in-cluster endpoint is
+`http://k8s-mcp-server.daedalus.svc.cluster.local:8080/mcp`. HTTP clients supply
+`Authorization: Bearer <token>` or `X-MCP-Token: <token>`. Existing Secrets
+provide current/next auth tokens and optional agent configuration.
+
+External access defaults off. When enabled, the root workflow uses the configured
+fixed NodePort and client CIDR. Follow the
+[external MCP prerequisite](../README.md#external-mcp-network-prerequisite),
+preserve working LAN clients and routes, and verify the authenticated API from
+a non-node LAN source. The root workflow deploys the service-owned `chart/`;
+`make render` in this folder renders that same chart locally.
+
+## Local Development
+
+Build from this component directory using the Go toolchain in
+[src/go.mod](src/go.mod):
 
 ```bash
-# SSE transport (default)
-./k8s-mcp-server
-
-# Streamable HTTP transport — endpoint: http://localhost:8080/mcp
-./k8s-mcp-server --mode streamable-http
-
-# Stdio transport (for CLI/editor integrations)
-./k8s-mcp-server --mode stdio
-
-# Read-only mode (disables all write operations)
-./k8s-mcp-server --read-only
-
-# Disable Helm tools
-./k8s-mcp-server --no-helm
-
-# Combine flags
-./k8s-mcp-server --mode sse --port 9090 --read-only --no-helm
+make build
+./src/k8s-mcp-server --mode stdio --read-only
 ```
 
-### Container Image
+Running the server accesses the configured cluster. Before doing so, use the
+root environment/context setup and `make preflight`. CPU and memory tools also
+require a metrics API. The binary defaults differ from the root chart; select
+read-only mode explicitly for inspection.
 
-```bash
-# Build all locally maintained workspace images
-make -C .. images-build
+Build and publish images through the root image workflow. The
+[Dockerfile](src/Dockerfile) owns runtime dependencies and bundled tooling;
+[go.mod](src/go.mod) and `go.sum` own library versions.
 
-# Push and print the versioned deployment references
-make -C .. images-publish
-```
-
-The workspace Compose file is an image specification. Deploy the published
-image through the guarded root Kubernetes workflow described below.
-
-## Configuration
-
-### Command-Line Flags
+## Server Configuration
 
 | Flag          | Environment Variable | Default | Description                                      |
 | ------------- | -------------------- | ------- | ------------------------------------------------ |
@@ -139,7 +83,7 @@ For HTTP transports, set `MCP_AUTH_TOKEN` to require `Authorization: Bearer
 `MCP_AUTH_TOKEN_NEXT` during a rotation overlap. Health endpoints remain
 unauthenticated for Kubernetes probes.
 
-Set `MCP_REQUIRE_AUTH=true` to fail startup when an HTTP transport is selected without `MCP_AUTH_TOKEN`. The default Kubernetes manifest uses this mode.
+Set `MCP_REQUIRE_AUTH=true` to fail startup when an HTTP transport is selected without `MCP_AUTH_TOKEN`. The root Helm chart requires this mode.
 
 ### DevOps Agent Environment Variables
 
@@ -164,192 +108,53 @@ All HTTP modes expose local-only `GET /livez` and `/readyz`.
 remains a local compatibility alias. Upstream slowness never turns liveness
 into a restart loop.
 
-## Operational Safety Model
+## Operational Contracts
 
-This server is treated as an agent-facing platform component. The hardening work makes the operational contract explicit: default deployments are read-only, HTTP access can require authentication, dangerous capabilities are opt-in, outputs are sanitized, and side effects are auditable.
-
-### Safe Defaults
-
-- The Kubernetes deployment uses in-cluster ServiceAccount credentials instead of a mounted kubeconfig.
-- The default manifest sets `SERVER_READ_ONLY=true`, so write tools and Helm mutations are not registered.
-- The default manifest sets `MCP_REQUIRE_AUTH=true` and reads `MCP_AUTH_TOKEN` from the `k8s-mcp-auth` Secret.
-- Health paths remain unauthenticated for probes; MCP HTTP traffic requires
-  `Authorization: Bearer <token>` or `X-MCP-Token: <token>` when auth is set.
-
-### Capability Gates
-
-- Normal write tools require non-read-only mode.
-- `execInPod` additionally requires `MCP_ENABLE_EXEC=true` or `--enable-exec`.
-- `runKubectlCommand` additionally requires `MCP_ENABLE_KUBECTL=true` or `--enable-kubectl`.
-- `devopsAgent` is inspection-only unless the parent server is write-enabled and `MCP_ENABLE_AGENT_WRITE=true`.
-- Child opencode MCP sessions inherit `MCP_ENABLE_EXEC` and `MCP_ENABLE_KUBECTL` from the parent environment when those gates are set.
-- `switchContext` is not registered because process-global kubeconfig context switching is unsafe for concurrent HTTP MCP usage.
-
-### Audit Logging
-
-Every registered tool goes through the audited registration wrapper in `main.go`. Tool calls log the tool name, capability class, status, duration, and error text when present. This gives operators a stable trail for read, write, destructive, exec, kubectl, log-reading, validation, Helm, and agent activity.
-
-### Output Safety
-
-- JSON tool responses pass through the shared sanitizer before returning to clients.
-- Pod logs, resource YAML, Helm release output, GPU/operator logs, kubectl output, and agent output are redacted for secret-like values.
-- Kubernetes Secret `data` and `stringData` values are redacted, including short base64 values.
-- Sensitive key names such as passwords, tokens, authorization headers, certificates, and private keys are redacted recursively in structured output.
-- Tool text is capped at 64 KiB, leaving headroom below the consuming application's 128 KiB limit.
-- Oversized JSON remains valid and retains a compact prefix plus `_responseMetadata` instead of becoming an error-only response.
-- High-volume discovery, resource-list, event, and cluster-summary tools use compact defaults; callers can opt into bounded detail or apply narrower filters.
-
-### Idempotent Apply Behavior
-
-- `createResource` and `createResourceYAML` use Kubernetes server-side apply with field manager `k8s-mcp-server`.
-- `createResourceYAML` can infer `kind` from the manifest when the caller omits it.
-- Apply handlers validate `apiVersion`, `kind`, and metadata name before submitting side effects.
-- Dynamic Kubernetes list calls use paginated API reads to avoid oversized list responses.
-
-### Timeouts and Bounded Operations
-
-- HTTP transports set read-header, read, idle, and graceful shutdown timeouts.
-- Helm Kubernetes REST clients default to a 30-second timeout when no timeout is already configured.
-- `runKubectlCommand` and `devopsAgent` use explicit per-call execution timeouts.
-
-### Build Reproducibility
-
-- The release Docker image bakes a curated DevOps-engineer skill set under `src/skills/` into `/home/appuser/.config/opencode/skills/`. The set is scoped to Kubernetes monitoring/remediation, shell scripting, and Python/Rust code work; see [Agent Skills](#agent-skills) for the full list.
-- `src/.dockerignore` excludes build output, embedded `.git`, and `.DS_Store`. The `src/skills/` tree is intentionally not excluded so that the audited skill set ships with the image.
-- Per-user or experimental skills can still be supplied without rebuilding by volume-mounting over `/home/appuser/.config/opencode/skills/` at runtime.
-
-### Review Artifacts
-
-The structured review deliverables live under `docs/review/`:
-
-- `executive-summary.md` — readiness assessment and remaining risks.
-- `risk-register.csv` — decision-ready findings with severity, evidence, owner, effort, and status.
-- `architecture-themes.md` — cross-cutting design themes and platform standards.
-- `remediation-roadmap.md` — immediate, near-term, and strategic work.
-- `release-readiness-checklist.md` — verification gates before broader reliance.
+- Read-only mode omits Kubernetes and Helm mutations and forces agent inspection.
+  Exec, direct kubectl, and agent writes require their separate capability gates
+  as well as write-enabled server mode and appropriate RBAC.
+- Every registered tool passes through the audit wrapper. Logs include tool,
+  capability, status, duration, and errors.
+- Structured and text responses pass through secret redaction and output bounds.
+  Kubernetes Secret values, logs, Helm results, and agent output use those paths.
+  Bounds and compaction are implemented in the server and response helpers.
+- Resource creation uses server-side apply with field manager `k8s-mcp-server`.
+  Handlers validate identity fields before submitting changes.
+- Resource listing is paginated; discovery and summary tools return bounded
+  output. Narrow filters when a response indicates truncation.
+- Health endpoints distinguish the local process from upstream Kubernetes
+  connectivity. A local readiness response is not a cluster health assessment.
+- Process-global context switching is not exposed. Each server instance retains
+  its configured cluster identity.
 
 ## DevOps Agent
 
-The `devopsAgent` tool launches an autonomous AI agent for Kubernetes cluster management. It uses [opencode](https://github.com/anomalyco/opencode) to run a headless agentic loop. By default the agent is inspection-only. If the parent server is not read-only and `MCP_ENABLE_AGENT_WRITE=true` is set, the agent can use write-capable k8s and Helm MCP tools to manage workloads autonomously, producing a structured report of actions taken and results.
+`devopsAgent` launches `opencode run` with a child stdio MCP server. It requires
+`OPENCODE_BASE_URL`, `OPENCODE_API_KEY`, and `OPENCODE_MODEL`. The chart optionally
+reads those settings from the Secret named by `agent.existingSecret`, with keys
+`base-url`, `api-key`, and `model`; provision it through the approved Secret path.
 
-### How It Works
+The agent is inspection-only unless the parent is write-enabled and
+`MCP_ENABLE_AGENT_WRITE=true`. Child sessions inherit applicable exec/kubectl
+capability gates. A tool prompt does not expand the server's authority.
 
-1. You call `devopsAgent` with a natural language description of the task
-2. The server spawns `opencode run` as a headless subprocess
-3. OpenCode connects to a child k8s-mcp-server (stdio, `--no-agent`) for cluster access
-4. The agent autonomously calls MCP tools to accomplish the task
-5. Returns a structured report: objective, actions taken, current state, issues found, next steps
+| Parameter | Requirement | Meaning |
+| --- | --- | --- |
+| `prompt` | Required | Task to perform |
+| `namespace` | Optional | Investigation scope |
+| `model` | Optional | Override the configured model |
+| `timeout` | Optional | Bounded execution time, as defined in the tool schema |
+| `readOnly` | Optional | Request inspection-only behavior; server restrictions take precedence |
 
-### Prerequisites
-
-- [opencode](https://github.com/anomalyco/opencode) CLI installed (included in Docker image)
-- An OpenAI-compatible LLM endpoint accessible from the server
-- Environment variables set: `OPENCODE_BASE_URL`, `OPENCODE_API_KEY`, `OPENCODE_MODEL`
-
-### Kubernetes Deployment
-
-Create a Secret with your LLM provider credentials:
-
-```bash
-kubectl -n k8s-mcp-server create secret generic k8s-mcp-agent-config \
-  --from-literal=base-url="http://llm.local:8080/v1" \
-  --from-literal=api-key="sk-your-api-key" \
-  --from-literal=model="private-llm/llama-3.1-70b" \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-The deployment manifest references this Secret with `optional: true`, so the server works fine without it — the `devopsAgent` tool simply won't be registered.
-
-### Workspace Image and Deployment
-
-The workspace Compose file is an image specification, not a local deployment
-path. Build the image from the workspace root, then deploy through the guarded
-root Kubernetes workflow:
-
-```bash
-make -C .. images-build
-COMPONENTS=k8s-mcp make -C .. deploy
-```
-
-### Tool Parameters
-
-| Parameter  | Required | Default | Description                                                          |
-| ---------- | -------- | ------- | -------------------------------------------------------------------- |
-| `prompt`   | Yes      | —       | Natural language description of the task to perform                  |
-| `namespace`| No       | —       | Namespace to focus the investigation on                              |
-| `model`    | No       | env var | Override `OPENCODE_MODEL` for this run                               |
-| `timeout`  | No       | `300`   | Max execution time in seconds (max: 900)                             |
-| `readOnly` | No       | `false` | When true, restricts the agent to read-only inspection. Forced to true when the parent server runs with `--read-only` or `MCP_ENABLE_AGENT_WRITE` is not enabled |
-
-## Agent Skills
-
-[OpenCode skills](https://opencode.ai/docs/skills) are reusable instruction sets that extend the agent's behavior for specific domains — e.g., how to triage GPU workloads, how to interpret your team's alerting conventions, or domain-specific runbooks.
-
-### Bundled Skill Set
-
-The Docker image ships with a curated set of skills scoped to a DevOps-engineer workload: Kubernetes cluster monitoring and remediation, shell scripting, Python/Rust code work, and the NVIDIA NIM/RAG stack this server is typically deployed alongside. The bundled set covers:
-
-- **Core DevOps / SRE** — `devops-engineer`, `kubernetes-specialist`, `sre-engineer`, `monitoring-expert`, `chaos-engineer`, `terraform-engineer`, `mcp-developer`
-- **Languages** — `python-pro`, `rust-engineer`, `golang-pro`
-- **Debugging / quality** — `debugging-wizard`, `code-reviewer`, `code-documenter`, `test-master`, `cli-developer`, `the-fool`
-- **Security** — `secure-code-guardian`, `security-best-practices`, `security-reviewer`, `security-threat-model`
-- **Data / RAG** — `database-optimizer`, `postgres-pro`, `sql-pro`, `pandas-pro`, `ml-pipeline`, `rag-architect`, `jupyter-notebook`, `prompt-engineer`
-- **NVIDIA stack** — `nat-*` (NeMo Agent Toolkit: agent configuration, evaluation, installation, MCP+serving, optimization, path-checks, telemetry, tools/functions, user-rules, workflow-creation), `nvcf-ngc-cli-skill`, `nvcf-self-managed-cli`, `nvcf-self-managed-installation`, `nv-html`
-- **Workflow / meta** — `gh-address-comments`, `gh-fix-ci`, `define-goal`, `skill-creator`, `skill-evolution`
-
-The runtime image installs the toolchain those skills assume — `git`, `github-cli`, `python3`, `py3-yaml`, and `jq` — alongside the existing `helm`, `kubectl`, `bash`, and `curl`. Skill helper scripts (e.g., `skill-creator/scripts/quick_validate.py`, `gh-fix-ci/scripts/inspect_pr_checks.py`) run directly in the container without extra setup.
-
-### Adding Skills
-
-Each skill lives in its own subdirectory under `src/skills/` and requires a `SKILL.md` file with YAML frontmatter:
-
-```
-src/skills/
-└── my-skill/
-    └── SKILL.md
-```
-
-**`src/skills/my-skill/SKILL.md`**:
-
-```markdown
----
-name: my-skill
-description: Brief description of what this skill teaches the agent
----
-
-Your skill instructions here. Describe domain knowledge, investigation strategies,
-or specialized runbooks that the agent should follow when relevant.
-```
-
-**Frontmatter fields:**
-
-| Field         | Required | Description                                                        |
-| ------------- | -------- | ------------------------------------------------------------------ |
-| `name`        | Yes      | Lowercase letters/numbers/hyphens only; must match directory name  |
-| `description` | Yes      | 1–1024 character description used by the agent to select the skill |
-| `license`     | No       | Licensing information                                              |
-| `metadata`    | No       | Custom string key-value pairs                                      |
-
-The `name` must match its parent directory name exactly and follow the pattern `^[a-z0-9]+(-[a-z0-9]+)*$`.
-
-### How Skills Are Loaded
-
-**Container image / Kubernetes:** The standard image bakes the curated skill
-set under `src/skills/` into `/home/appuser/.config/opencode/skills/` during
-build. The set is audited, scoped to the DevOps-engineer role, and ships with
-the runtime tools each skill assumes (see
-[Bundled Skill Set](#bundled-skill-set)). Extend it through a reviewed image
-release or Kubernetes volume configuration.
-
-**Local development (without Docker):** Place skills in the global opencode config directory:
-
-```
-~/.config/opencode/skills/<name>/SKILL.md
-```
+The image copies `src/skills/` into the opencode configuration directory. The
+tracked tree contains a placeholder; image builders must supply the intended
+skill set or use a reviewed runtime volume mount. Do not assume a named skill is
+bundled without inspecting the build inputs. Keep reusable instructions in each
+skill's `SKILL.md` and validate them when changed.
 
 ## Tool Reference
 
-### Kubernetes — Read-Only Tools (31)
+### Kubernetes — Read-Only Tools
 
 #### Discovery & Core
 
@@ -422,7 +227,7 @@ Disabled when `--read-only` is set. `execInPod` and `runKubectlCommand` also req
 | `execInPod`          | Execute a command in a pod container. Requires `MCP_ENABLE_EXEC=true`. | `name`\*, `namespace`\*, `command`\*, `container` |
 | `runKubectlCommand`  | Execute a direct kubectl command. Requires `kubectl` in PATH and `MCP_ENABLE_KUBECTL=true`. | `command`\*, `timeout` |
 
-`switchContext` is intentionally not registered. Process-global context switching is unsafe for concurrent HTTP MCP usage; run separate server instances or use a request/session-scoped multi-cluster model instead.
+`switchContext` is intentionally not registered. Process-global context switching is unsafe for concurrent HTTP MCP usage; use separate server instances for different cluster identities.
 
 ### Agent Tool
 
@@ -466,194 +271,28 @@ The `kind` parameter across all tools accepts multiple formats. All of these res
 
 This works for any resource type, including CRDs.
 
-## Deployment
+## Development and Validation
 
-The [active Helm chart](../helm/k8s-mcp-server/README.md) deploys in `daedalus`.
-It uses in-cluster ServiceAccount credentials. By default, the chart enables
-`SERVER_READ_ONLY`, `SERVER_NO_HELM`, and `MCP_REQUIRE_AUTH`, with observer RBAC
-that excludes Secret data. Persist `K8S_MCP_READ_ONLY=false` and
-`K8S_MCP_NO_HELM=false` in the root `.env` to enable Kubernetes and Helm writes
-with cluster-wide resource CRUD permissions. Helm also requires Secret access
-for release state. The independent `K8S_MCP_ENABLE_EXEC`,
-`K8S_MCP_ENABLE_KUBECTL`, and `K8S_MCP_ENABLE_AGENT_WRITE` settings default to
-`false`; set them to `true` to expose those capabilities in write-enabled mode.
-The [chart documentation](../helm/k8s-mcp-server/README.md) describes the RBAC
-and rollback behavior. HTTP authentication remains mandatory in every mode.
+| Path | Responsibility |
+| --- | --- |
+| [src/main.go](src/main.go) | Transport, authentication, tool registration, audit/output bounds |
+| [src/tools](src/tools/) | MCP schemas |
+| [src/handlers](src/handlers/) | Request handling and safe response serialization |
+| [src/pkg](src/pkg/) | Kubernetes, Helm, and agent clients |
+| [Makefile](Makefile) | Build and validation commands |
+| [Helm chart](chart) | Root deployment contract |
 
-### Kubernetes In-Cluster
-
-The included manifest at `deploy/k8s-mcp-server.yaml` provides a safe-by-default in-cluster deployment. It uses the pod ServiceAccount for Kubernetes access, runs in read-only mode, and requires an MCP bearer token for HTTP MCP requests.
+From this directory:
 
 ```bash
-# Create the namespace first so the auth secret can be created.
-kubectl create namespace k8s-mcp-server --dry-run=client -o yaml | kubectl apply -f -
-
-# Create the HTTP MCP auth token secret.
-kubectl -n k8s-mcp-server create secret generic k8s-mcp-auth \
-  --from-literal=token="$(openssl rand -hex 32)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Apply RBAC, Deployment, PDB, NetworkPolicy, and Service.
-kubectl apply -f deploy/k8s-mcp-server.yaml
-```
-
-The manifest includes:
-
-- Dedicated `k8s-mcp-server` namespace
-- ServiceAccount with an observer ClusterRole that excludes Secret data
-- Two-replica Deployment with hard hostname spread, PDB, and local probes
-- `SERVER_READ_ONLY=true`, `SERVER_NO_HELM=true`, and `MCP_REQUIRE_AUTH=true`
-- Hardened security context (non-root, read-only root filesystem, all capabilities dropped)
-- Resource requests of 500m CPU/512Mi and limits of 4 CPU/8Gi
-- Authenticated fixed NodePort on `30080`, with Cilium source-range enforcement
-  restricted to `MCP_EXTERNAL_CLIENT_CIDR` (default `192.168.1.0/24`)
-
-#### Versioned Deploy
-
-```bash
-./deploy.sh
-```
-
-The script requires `K8S_MCP_IMAGE=repository:MAJOR.MINOR.PATCH`, applies the
-manifest, and synchronizes current/next auth plus optional agent configuration.
-Build and publish are separate actions. Content checksums and the image version
-trigger a rollout only when effective state changes.
-
-The deploy wrapper refuses a non-dry-run deployment unless the cluster Cilium
-release has `bpf.lbSourceRangeAllTypes=true`; this is required for the
-Service's `loadBalancerSourceRanges` allow-list to apply to NodePort traffic.
-Because Kubernetes accepts that field only for `LoadBalancer` Services, the
-manifest uses the unclaimed class `daedalus.ai/nodeport-only` and retains the
-fixed allocated NodePort. MetalLB therefore does not advertise a separate
-address.
-
-### MCP Client Configuration
-
-For MCP clients that connect via streamable HTTP (e.g., in-cluster agents):
-
-```
-http://k8s-mcp-server.k8s-mcp-server.svc.cluster.local:8080/mcp
-```
-
-Include the auth token as `Authorization: Bearer <token>` or `X-MCP-Token: <token>` for HTTP transports.
-
-#### Cursor / VS Code
-
-Add to your editor's MCP settings (`settings.json`):
-
-```json
-{
-  "mcp.mcpServers": {
-    "k8s-mcp-server": {
-      "command": "k8s-mcp-server",
-      "args": ["--mode", "stdio"],
-      "env": {
-        "KUBECONFIG": "${env:HOME}/.kube/config"
-      }
-    }
-  }
-}
-```
-
-For read-only mode, add `"--read-only"` to the `args` array.
-
-## Security
-
-### Container Hardening
-
-The Docker image runs with a minimal attack surface:
-
-- **Non-root user** (`appuser`, UID 1001)
-- **Read-only root filesystem**
-- **All capabilities dropped**
-- **Minimal base image** — Alpine 3.21 with `helm` v3.17.3 (SHA256-pinned), `kubectl` v1.34.1 (SHA256-pinned), the opencode/Bun runtime, and the DevOps-skill toolchain (`git`, `github-cli`, `python3`, `py3-yaml`, `jq`, `bash`, `curl`)
-- **No privilege escalation** allowed
-
-### Read-Only Mode
-
-Use `--read-only` or `SERVER_READ_ONLY=true` to prevent cluster state changes through this server. This disables Kubernetes and Helm write tools and forces `devopsAgent` into inspection-only mode. `execInPod` and `runKubectlCommand` are additionally disabled unless their explicit capability gates are enabled.
-
-The default Kubernetes manifest sets `SERVER_READ_ONLY=true` and uses read-only ServiceAccount RBAC.
-
-### RBAC
-
-The included ClusterRole (`k8s-mcp-server-readonly`) grants read access to standard Kubernetes API groups:
-
-- **Core** — pods, services, configmaps, secrets, namespaces, nodes, events, endpoints, PVs, PVCs, resource quotas, limit ranges, service accounts
-- **apps** — deployments, replicasets, statefulsets, daemonsets
-- **batch** — jobs, cronjobs
-- **networking.k8s.io** — ingresses, network policies, ingress classes
-- **storage.k8s.io** — storage classes, volume attachments
-- **rbac.authorization.k8s.io** — roles, rolebindings, clusterroles, clusterrolebindings
-- **autoscaling** — horizontal pod autoscalers
-- **policy** — pod disruption budgets
-- **metrics.k8s.io** — pod and node metrics
-
-The root Helm chart creates and binds a separate writer ClusterRole when
-`K8S_MCP_READ_ONLY=false`. It grants cluster-wide resource CRUD permissions,
-including Secrets and custom resources, without the RBAC `bind`, `escalate`,
-or `impersonate` verbs. See the [chart configuration](../helm/k8s-mcp-server/README.md).
-
-## Development
-
-### Project Structure
-
-```
-├── .github/workflows/       # CI pipeline (build, test, vet, lint)
-├── deploy/                  # Kubernetes deployment manifests
-├── docs/review/             # Review findings, roadmap, and release gates
-├── scripts/                 # Git hooks
-├── src/
-│   ├── main.go              # Entry point, tool registration
-│   ├── Dockerfile           # Multi-stage build
-│   ├── .dockerignore        # Reproducible Docker build exclusions
-│   ├── .golangci.yml        # Linter configuration
-│   ├── tools/               # MCP tool schema definitions
-│   ├── handlers/            # Tool request handlers
-│   └── pkg/                 # Client libraries (k8s, helm, agent)
-├── ../docker-compose.yaml   # Workspace image build specification
-├── Makefile                 # Build, test, lint, format, deploy
-├── deploy.sh                # Build + deploy script
-└── redeploy.sh              # Backward-compatible wrapper for deploy.sh
-```
-
-### Makefile Targets
-
-| Target      | Description                                            |
-|-------------|--------------------------------------------------------|
-| `make build`      | Build the binary                                 |
-| `make test`       | Run all unit tests                               |
-| `make vet`        | Run `go vet` static analysis                     |
-| `make fmt`        | Auto-format all Go source files with `gofmt`     |
-| `make fmt-check`  | Check formatting without modifying (used in CI)  |
-| `make lint`       | Run `golangci-lint` (skips if not installed)      |
-| `make check`      | Run all checks: format, vet, test, build         |
-| `make docker`     | Build the Docker image                           |
-| `make deploy`     | Full rebuild + deploy via `deploy.sh`            |
-| `make clean`      | Remove build artifacts                           |
-| `make hooks`      | Install the git pre-commit hook                  |
-
-### Getting Started
-
-```bash
-# Install the pre-commit hook (runs fmt-check, vet, and tests before each commit)
-make hooks
-
-# Run the full check suite locally (same checks as CI)
 make check
 ```
 
-### Verification
-
-The hardening pass was verified with:
-
-- `make test`
-- `make check`
-- `make -C .. images-validate`
-- `kubectl apply --dry-run=client -f deploy/k8s-mcp-server.yaml`
-- `make -C .. images-build`
-
-Test coverage was added for auth environment parsing, HTTP auth decisions, recursive output sanitization, safe handler marshaling, and agent capability-gate propagation.
+This runs formatting checks, vet, tests, and a binary build. `make lint` uses
+`golangci-lint` when installed. Tests cover API/handler behavior, authentication,
+redaction, bounds, and capability propagation using fixtures or fake services.
+Use root `make validate-local` for executable source changes and
+`make validate-cluster` for authorized cluster-facing acceptance.
 
 ### Adding a New Tool
 
@@ -679,16 +318,3 @@ addAuditedTool(s, tools.MyNewTool(), "read", handlers.MyNewHandler(client))
 ```
 
 Use the correct capability string for the tool, such as `read`, `read/logs`, `write`, `write/destructive`, `exec`, `kubectl`, or `agent`. Kubernetes handlers that return cluster data should use the existing `marshalSafe` path or `k8s.SanitizeText` so large responses and secrets are handled consistently.
-
-### Key Dependencies
-
-| Package                       | Version | Purpose                     |
-| ----------------------------- | ------- | --------------------------- |
-| `github.com/mark3labs/mcp-go` | v0.41.1 | MCP protocol implementation |
-| `helm.sh/helm/v3`             | v3.19.0 | Helm client library         |
-| `k8s.io/client-go`            | v0.34.1 | Kubernetes client           |
-| `k8s.io/metrics`              | v0.34.1 | Metrics API client          |
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

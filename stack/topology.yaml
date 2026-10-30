@@ -14,7 +14,7 @@ releases:
         protocol: http
         healthPath: /health
   milvus:
-    owner: helm/milvus
+    owner: nim-milvus-ms/chart
     tier: online
     namespace: daedalus
     requiredFor: [domain-retrieval, existing-document-search]
@@ -29,7 +29,7 @@ releases:
         protocol: http
         healthPath: /minio/health/ready
   retriever:
-    owner: nemotron-retriever
+    owner: nemotron-retriever/chart
     tier: online
     namespace: daedalus
     requiredFor: [domain-retrieval, existing-document-search]
@@ -46,7 +46,7 @@ releases:
         healthPath: /adapter-health
         optional: true
   nv-ingest:
-    owner: helm/nv-ingest
+    owner: nv-ingest/chart
     tier: ingestion
     namespace: daedalus
     requiredFor: [new-document-ingestion, collection-refresh]
@@ -58,7 +58,7 @@ releases:
         protocol: http
         healthPath: /v1/health/ready
   pdf-server:
-    owner: helm/pdf-server
+    owner: pdf-server/chart
     tier: ingestion
     namespace: daedalus
     requiredFor: [collection-refresh]
@@ -69,14 +69,14 @@ releases:
         protocol: http
         healthPath: /readyz
   url-ingest:
-    owner: helm/url-ingest
+    owner: url-ingest/chart
     tier: ingestion
     namespace: daedalus
     requiredFor: [collection-refresh]
     dependsOn: [milvus, retriever, nv-ingest, pdf-server]
     services: {}
   k8s-mcp:
-    owner: helm/k8s-mcp-server
+    owner: k8s-multicluster-mcp/chart
     tier: tools
     namespace: daedalus
     requiredFor: []
@@ -90,7 +90,7 @@ releases:
         dependencyPath: /dependencyz
         mcpPath: /mcp
   unifi-mcp:
-    owner: helm/unifi-network-mcp-server
+    owner: unifi-network-mcp/chart
     tier: tools
     namespace: daedalus
     requiredFor: []

@@ -16,14 +16,14 @@ components:
       controlPlane: sha256:4f83fa7ae5c55461bc55cd3da1056305df8b6b9325503e2875f069c735efafad
       postgresql: sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
   milvus:
-    source: helm/milvus
+    source: nim-milvus-ms/chart
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chart: zilliztech/milvus
     chartVersion: 5.0.14
     applicationVersion: 2.6.11
     image: milvusdb/milvus:v2.6.11
   retriever:
-    source: nemotron-retriever
+    source: nemotron-retriever/chart
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chartVersion: 0.4.0
     images:
@@ -31,7 +31,7 @@ components:
       reranker: vllm/vllm-openai:v0.32.0
       adapter: python:3.12.11-alpine3.22
   nv-ingest:
-    source: helm/nv-ingest
+    source: nv-ingest/chart
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     chartVersion: 26.3.0
     image: nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
@@ -39,21 +39,21 @@ components:
     parserModel: nvidia/Nemotron-3.5-Parse
     parserModelRevision: 4035ffb1d8f8bafcdb867dfaf6f7514f101464f9
   pdf-server:
-    source: helm/pdf-server
+    source: pdf-server/chart
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     image: daedalus.ddns.me:5050/btuttle/pdf-server:0.1.0
   url-ingest:
-    source: helm/url-ingest
+    source: url-ingest/chart
     sourceRevision: 22b8c74d53246aa3b591c3fbc74def94e0c0ce1a
     images:
       crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
       runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.1
   k8s-mcp:
-    source: helm/k8s-mcp-server
+    source: k8s-multicluster-mcp/chart
     sourceRevision: 61528b15ccc36507e28a706fbbd34de5ef8b88a3
     image: daedalus.ddns.me:5050/btuttle/k8s-mcp-server:0.1.2
   unifi-mcp:
-    source: helm/unifi-network-mcp-server
+    source: unifi-network-mcp/chart
     sourceRevision: 7bd3958d803eaa9fff6b56a21a50c77e0f3b17a3
     image: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server:0.2.1
 models:

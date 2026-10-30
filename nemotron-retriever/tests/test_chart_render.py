@@ -8,7 +8,7 @@ import yaml
 from jinja2 import Environment
 
 
-CHART_DIR = pathlib.Path(__file__).parents[1]
+CHART_DIR = pathlib.Path(__file__).parents[1] / "chart"
 
 
 def helm_template(*extra_args: str, namespace: str = "review-namespace"):

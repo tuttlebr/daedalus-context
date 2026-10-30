@@ -1,8 +1,10 @@
 # Daedalus Context Agent Guidance
 
-Use `$operate-daedalus-context` for root deployment, image release, health,
-ingestion, Daedalus integration, and recovery tasks. `README.md` and the root
-`Makefile` are the canonical human and command interfaces.
+Use `$operate-daedalus-context` for full repository or focused component code
+review, documentation alignment, bug identification and remediation, root
+deployment, image release, health, ingestion, Daedalus integration, and recovery
+tasks. `README.md` and the root `Makefile` are the canonical human and command
+interfaces.
 
 Kubernetes is the only runtime deployment path. The root Compose file defines
 images for validation, building, and publishing only.

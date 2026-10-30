@@ -29,7 +29,7 @@ class RootInterfaceTests(unittest.TestCase):
         if not shutil.which("helm"):
             self.skipTest("helm is required for the rendered deployment contract")
         rendered = subprocess.check_output(
-            ["helm", "template", "nv-ingest", str(ROOT / "helm/nv-ingest"),
+            ["helm", "template", "nv-ingest", str(ROOT / "nv-ingest/chart"),
              "--namespace", "daedalus", "--post-renderer", str(ROOT / "nv-ingest/helm-post-renderer.sh")],
             text=True,
         )
@@ -61,29 +61,16 @@ class RootInterfaceTests(unittest.TestCase):
             self.assertRegex(example, rf"(?m)^{re.escape(variable)}=.*$")
 
         url_ingest = yaml.safe_load(
-            (ROOT / "helm/url-ingest/values.yaml").read_text(encoding="utf-8")
+            (ROOT / "url-ingest/chart/values.yaml").read_text(encoding="utf-8")
         )
         for collection, values in url_ingest["collections"].items():
             self.assertLessEqual(values["pdfFileChunkSize"], 2, collection)
 
         cronjobs = (
-            ROOT / "helm/url-ingest/templates/cronjobs.yaml"
+            ROOT / "url-ingest/chart/templates/cronjobs.yaml"
         ).read_text(encoding="utf-8")
-        renderer = (
-            ROOT / "url-ingest/k8s/render-manual-job.py"
-        ).read_text(encoding="utf-8")
-        cleanup_renderer = (
-            ROOT / "url-ingest/k8s/render-lock-cleanup-job.py"
-        ).read_text(encoding="utf-8")
-        deploy = (ROOT / "url-ingest/k8s/deploy.sh").read_text(encoding="utf-8")
         self.assertIn("GLOBAL_INGEST_CAPACITY", cronjobs)
         self.assertIn("/opt/daedalus/refresh.py", cronjobs)
-        self.assertIn('"GLOBAL_INGEST_CAPACITY"', renderer)
-        self.assertIn(
-            '--global-ingest-capacity "$MAX_PARALLEL_INGEST_SHARDS"', deploy
-        )
-        self.assertIn("rmdir", cleanup_renderer)
-        self.assertIn("clear_stale_capacity_locks", deploy)
 
     def test_all_context_releases_share_daedalus_namespace_and_have_charts(self) -> None:
         topology = yaml.safe_load(
@@ -93,32 +80,34 @@ class RootInterfaceTests(unittest.TestCase):
             {release["namespace"] for release in topology["releases"].values()},
             {"daedalus"},
         )
-        charts = (
-            ROOT / "../daedalus-hindsight/charts/daedalus-hindsight",
-            ROOT / "helm/milvus",
-            ROOT / "nemotron-retriever",
-            ROOT / "helm/nv-ingest",
-            ROOT / "helm/pdf-server",
-            ROOT / "helm/url-ingest",
-            ROOT / "helm/k8s-mcp-server",
-            ROOT / "helm/unifi-network-mcp-server",
-        )
-        for chart in charts:
+        locked = yaml.safe_load((ROOT / "stack/components.lock.yaml").read_text())["components"]
+        owned_charts = set()
+        for component, release in topology["releases"].items():
+            self.assertEqual(release["owner"], locked[component]["source"])
+            chart = ROOT / release["owner"]
             self.assertTrue((chart / "Chart.yaml").is_file(), chart)
             self.assertTrue((chart / "values.yaml").is_file(), chart)
+            if not release["owner"].startswith("../"):
+                self.assertEqual(Path(release["owner"]).parts[1:], ("chart",))
+                owned_charts.add(chart / "Chart.yaml")
+        self.assertEqual(set(ROOT.glob("*/chart/Chart.yaml")), owned_charts)
+
+    def test_compose_is_only_an_image_build_inventory(self) -> None:
+        compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())
+        self.assertEqual(set(compose), {"name", "services"})
+        for name, service in compose["services"].items():
+            self.assertLessEqual(set(service), {"build", "image", "profiles"}, name)
+            self.assertTrue((ROOT / service["build"]["context"]).is_dir(), name)
 
     def test_incompatible_workloads_exclude_daedalus_06(self) -> None:
-        paths = (
-            ROOT / "pdf-server/k8s/pdf-server.yaml",
-            ROOT / "k8s-multicluster-mcp/deploy/k8s-mcp-server.yaml",
-            ROOT / "unifi-network-mcp/deploy/unifi-network-mcp-server.yaml",
-        )
-        for path in paths:
-            deployments = [
-                document
-                for document in yaml.safe_load_all(path.read_text(encoding="utf-8"))
-                if document and document.get("kind") == "Deployment"
-            ]
+        charts = ("pdf-server/chart", "k8s-multicluster-mcp/chart", "unifi-network-mcp/chart")
+        for path in charts:
+            rendered = subprocess.check_output(
+                ["helm", "template", "review", str(ROOT / path), "--namespace", "daedalus"],
+                text=True,
+            )
+            deployments = [document for document in yaml.safe_load_all(rendered)
+                           if document and document.get("kind") == "Deployment"]
             self.assertEqual(len(deployments), 1, path)
             affinity = deployments[0]["spec"]["template"]["spec"]["affinity"]
             expressions = affinity["nodeAffinity"][
@@ -135,8 +124,8 @@ class RootInterfaceTests(unittest.TestCase):
             )
 
         milvus_values = yaml.safe_load(
-            (ROOT / "nim-milvus-ms/custom-values.yaml").read_text(encoding="utf-8")
-        )
+            (ROOT / "nim-milvus-ms/chart/values.yaml").read_text(encoding="utf-8")
+        )["milvus"]
         expected_exclusion = {
             "key": "kubernetes.io/hostname",
             "operator": "NotIn",
@@ -155,8 +144,7 @@ class RootInterfaceTests(unittest.TestCase):
             "effect": "NoSchedule",
         }
         for path, root_key in (
-            (ROOT / "nim-milvus-ms/custom-values.yaml", None),
-            (ROOT / "helm/milvus/values.yaml", "milvus"),
+            (ROOT / "nim-milvus-ms/chart/values.yaml", "milvus"),
         ):
             values = yaml.safe_load(path.read_text(encoding="utf-8"))
             if root_key is not None:
@@ -316,13 +304,14 @@ class RootInterfaceTests(unittest.TestCase):
         self.assertTrue(removed.isdisjoint(make_targets()))
 
         tracked = subprocess.run(
-            ["git", "ls-files", "*.md"],
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
             cwd=ROOT,
             check=True,
             capture_output=True,
             text=True,
         ).stdout.splitlines()
-        markdown_paths = [ROOT / path for path in tracked]
+        # Documentation deletions need not be staged to validate the working tree.
+        markdown_paths = [ROOT / path for path in tracked if (ROOT / path).is_file()]
         markdown_paths.extend(
             [
                 ROOT / "AGENTS.md",

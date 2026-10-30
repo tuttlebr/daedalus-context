@@ -25,6 +25,10 @@ charts/
 *.tgz
 *.prov
 
+# The active chart vendors its pinned dependency for offline rendering.
+!chart/charts/
+!chart/charts/*.tgz
+
 # Python/tool caches
 __pycache__/
 .pytest_cache/

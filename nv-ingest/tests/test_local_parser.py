@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 ENGINE_PATH = os.environ.get("LOCAL_PDF_PATH")
 if not ENGINE_PATH:
-    ENGINE_PATH = Path(__file__).resolve().parents[2] / "helm/nv-ingest/files/local_pdf.py"
+    ENGINE_PATH = Path(__file__).resolve().parents[2] / "nv-ingest/chart/files/local_pdf.py"
 SPEC = importlib.util.spec_from_file_location(
     "local_pdf", ENGINE_PATH
 )

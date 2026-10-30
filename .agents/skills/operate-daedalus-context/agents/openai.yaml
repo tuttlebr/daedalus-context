@@ -1,7 +1,7 @@
 interface:
-  display_name: "Daedalus Context Operations"
-  short_description: "Operate the Kubernetes context stack safely"
-  default_prompt: "Use $operate-daedalus-context to operate the Daedalus context stack using its current repository contracts and reconcile this guidance with verified operational changes."
+  display_name: "Daedalus Context Engineering"
+  short_description: "Review, fix, and operate the Daedalus context stack"
+  default_prompt: "Use $operate-daedalus-context to review, fix, or operate Daedalus context within the requested scope, using current repository contracts and evidence-based validation."
 
 policy:
   allow_implicit_invocation: true

@@ -1,29 +1,14 @@
 SHELL := /usr/bin/bash
 .SHELLFLAGS := -euo pipefail -c
+.DEFAULT_GOAL := test
 
-RELEASE_NAME ?= nv-ingest
-NAMESPACE ?= nv-ingest
-
-.PHONY: test render validate deploy status wait-ready smoke
-
+.PHONY: test validate
 test:
-	bash tests/test-deploy.sh
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
-render:
-	DRY_RUN=true bash deploy.sh
+validate: test validate-chart
+	bash -n helm-post-renderer.sh
 
-validate: test
-	bash -n deploy.sh validate.sh tests/test-deploy.sh
-
-deploy:
-	bash deploy.sh
-
-status:
-	helm status "$(RELEASE_NAME)" --namespace "$(NAMESPACE)"
-
-wait-ready:
-	kubectl --namespace="$(NAMESPACE)" rollout status \
-	  "deployment/$(RELEASE_NAME)" --timeout=20m
-
-smoke:
-	kubectl get --raw "/api/v1/namespaces/$(NAMESPACE)/services/http:$(RELEASE_NAME):7670/proxy/v1/health/ready"
+SERVICE_RELEASE := nv-ingest
+SERVICE_RENDER_ARGS = --post-renderer "$(SERVICE_ROOT)/helm-post-renderer.sh"
+include ../scripts/service-chart.mk

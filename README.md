@@ -20,6 +20,11 @@ cd /volume2/daedalus/datasets/daedalus-context
 test -e .env || cp .env.example .env
 ${EDITOR:-vi} .env
 
+set -a
+source .env
+set +a
+export EXPECTED_CONTEXT='kubernetes-admin@kubernetes'  # Use the approved literal for your cluster.
+
 make verify-shared-secrets
 make deploy
 ```
@@ -29,13 +34,6 @@ running the command. Do not populate `EXPECTED_CONTEXT` by reading the current
 context. That would defeat the wrong-cluster guard. `make deploy` loads `.env`,
 runs doctor and non-secret configuration checks, validates the cluster,
 reconciles all eight Helm releases in `daedalus`, and checks provider health.
-For the one-time conversion from the legacy namespaces, run
-`make migrate-legacy-secrets` before the verification command. It copies only
-the required Secret data and refuses to overwrite a differing destination.
-If Hindsight already exists in `daedalus-hindsight`, run `make
-migrate-hindsight` before the first full deployment. That guarded workflow
-copies its Secret and PostgreSQL data, compares source and target fingerprints,
-and leaves the old database/PVC available for rollback.
 
 After the providers are ready:
 
@@ -43,11 +41,15 @@ After the providers are ready:
 # Existing cluster: prove that persisted collections are still healthy.
 make health-dependencies
 
-# Fresh cluster only: publish, ingest, wait, and verify all required data.
-make seed-data CORPUS_GENERATION=release-2026-08-09
+# Fresh corpus: publish PDFs and submit refresh Jobs for the selected collections.
+make seed-data CORPUS_GENERATION=corpus-v1 \
+  COLLECTIONS="nvidia kubernetes vetpartner semianalysis mentalhealth"
+make refresh-status
 ```
 
-Do not seed an existing cluster merely because services were redeployed.
+Job submission does not establish ingestion completion. Follow the durable
+refresh status and verify retrieval after the Jobs finish. Do not seed an
+existing cluster merely because services were redeployed.
 
 Render the Daedalus consumer configuration, deploy Daedalus from its own
 repository, and then verify the complete path:
@@ -79,26 +81,46 @@ make health-stack
 | Check provider workloads | `make health-provider` | Read-only cluster access |
 | Check dependencies and data freshness | `make health-dependencies` | Read-only cluster access |
 | Probe providers from Daedalus | `make health-integration` | Read-only cluster access |
-| Publish or ingest data | `make seed-data` or `make run-ingest` | Writes corpus, Jobs, and collection data |
-| Remove an accepted legacy stack | `make cleanup-legacy` | Destructively removes only the documented legacy targets |
+| Publish PDF inputs | `make publish-corpus` | Writes a corpus generation and switches its pointer |
+| Publish PDFs and submit refresh Jobs | `make seed-data COLLECTIONS="..."` | Writes corpus data and creates Jobs; returns after submission |
+| Submit refresh Jobs | `make refresh-run COLLECTIONS="..."` or `make run-ingest COLLECTIONS="..."` | Creates Jobs that write collection data |
+| Read refresh progress | `make refresh-status` | Reads durable status |
+| Submit retrieval verification | `make refresh-verify` | Creates a Job that reads retrieval data |
 
 Every command that reads or writes Kubernetes requires `EXPECTED_CONTEXT` and
 refuses to continue when it does not match the active context.
 
 ## Stack Model
 
-The dependency graph is declared in `stack/topology.yaml`.
+Each service owns its implementation, tests, and `chart/` in one root folder.
+The root Makefile is the deployment interface for every service:
+`make deploy COMPONENTS=<component>`, `make update COMPONENTS=<component>`, and
+`make restart COMPONENTS=<component>`. Component Makefiles provide local
+`render` and `validate-chart` commands through `scripts/service-chart.mk`;
+these commands do not contact Kubernetes. Hindsight is owned by its adjacent
+repository and remains an integration dependency.
+
+Chart values, templates, schemas, and tests must describe the same contract.
+The Milvus and NV-Ingest charts pin upstream dependencies with `Chart.lock`
+and vendored archives. Dependency updates are explicit version changes.
+Production credentials remain in existing Secrets. Helm rollback does not
+restore Secret contents or database data. `docker-compose.yaml` contains only
+image build and publication settings. Shared CI lives in `.github/workflows/`;
+install development hooks from the root with `pre-commit install`.
+
+The dependency graph and service contracts are declared in
+[stack/topology.yaml](stack/topology.yaml). Component guides are linked below.
 
 | Component | Owning directory | Namespace | Role |
 | --- | --- | --- | --- |
 | `hindsight` | `../daedalus-hindsight/charts/daedalus-hindsight/` | `daedalus` | Durable memory API, control plane, and PostgreSQL |
-| `milvus` | `helm/milvus/` | `daedalus` | Vector database and MinIO object storage |
-| `retriever` | `nemotron-retriever/` | `daedalus` | Embedding and optional reranking inference |
-| `nv-ingest` | `helm/nv-ingest/` | `daedalus` | Document extraction, chunking, and storage |
-| `pdf-server` | `helm/pdf-server/` | `daedalus` | Versioned, read-only source PDF corpus |
-| `url-ingest` | `helm/url-ingest/` | `daedalus` | Scheduled and manual collection population |
-| `k8s-mcp` | `helm/k8s-mcp-server/` | `daedalus` | Authenticated Kubernetes operations tools |
-| `unifi-mcp` | `helm/unifi-network-mcp-server/` | `daedalus` | Authenticated UniFi read and mutation tools |
+| [milvus](nim-milvus-ms/chart/README.md) | `nim-milvus-ms/chart/` | `daedalus` | Vector database and MinIO object storage |
+| [retriever](nemotron-retriever/README.md) | `nemotron-retriever/chart/` | `daedalus` | Embedding and optional reranking inference |
+| [nv-ingest](nv-ingest/DEPLOYMENT.md) | `nv-ingest/chart/` | `daedalus` | Document extraction service |
+| [pdf-server](pdf-server/README.md) | `pdf-server/chart/` | `daedalus` | Versioned, read-only source PDF corpus |
+| [url-ingest](url-ingest/README.md) | `url-ingest/chart/` | `daedalus` | Scheduled and manual collection population |
+| [k8s-mcp](k8s-multicluster-mcp/README.md) | `k8s-multicluster-mcp/chart/` | `daedalus` | Authenticated Kubernetes operations tools |
+| [unifi-mcp](unifi-network-mcp/README.md) | `unifi-network-mcp/chart/` | `daedalus` | Authenticated UniFi read and mutation tools |
 
 ```text
 hindsight   (independent durable-memory service)
@@ -166,10 +188,13 @@ Review at least these settings before deployment:
 All eight releases use `DAEDALUS_NAMESPACE=daedalus`. The chart values use
 same-namespace service names; there is no split-namespace production mode.
 
-Keep `MCP_EXTERNAL_ENABLED=false` to keep the authenticated MCP endpoints
-inside the cluster. For operator access, use a localhost-bound `kubectl
-port-forward` over the authenticated Kubernetes connection; the MCP token is
-still required.
+Fresh installations default to internal MCP Services. Preserve the deployed
+`MCP_EXTERNAL_ENABLED`, fixed NodePorts, ingress routes, and client CIDRs on
+updates. The home LAN includes ordinary clients as well as nodes and storage;
+a node-only allowlist does not preserve LAN access. Before changing exposure or
+authentication, inventory consumers, retain rollback configuration, and verify
+the API from an ordinary non-node LAN client. Compatibility breaks require
+explicit approval. A localhost-bound port-forward also requires the MCP token.
 
 For a UniFi controller using a private or self-signed certificate, set
 `UNIFI_CONTROLLER_CA_FILE` to a reviewed public PEM certificate bundle and keep
@@ -192,8 +217,8 @@ the following Secrets through the approved Secret-management path:
 
 Hindsight references `hindsight-runtime`, which its adjacent owning repository
 creates from `../daedalus-hindsight/.env` without placing credentials in Helm
-values. `make deploy-hindsight`, `make healthcheck-hindsight`, and `make
-migrate-hindsight` are the root entry points.
+values. `make deploy COMPONENTS=hindsight` and the root health targets are its
+entry points.
 
 Never commit `.env`, kubeconfigs, tokens, keys, credentials, or model data.
 
@@ -244,7 +269,7 @@ Published version tags must not be overwritten. `make deploy` and
 
 `stack/components.lock.yaml` is the release inventory. Before a rollout:
 
-1. Replace `pending-uncommitted-working-tree` source revisions with reviewed commits.
+1. Record reviewed source commits for the release.
 2. Publish the selected local image release.
 3. Record reviewed versions for upstream images and model artifacts.
 4. Keep the retriever revisions and serving contracts aligned with
@@ -268,31 +293,19 @@ failover, RPO, and RTO criteria.
 
 ### External MCP Network Prerequisite
 
-External MCP Services are disabled during bootstrap. When enabled, their fixed
-NodePorts use `loadBalancerSourceRanges`. Cilium must enforce
-source ranges for all load balancer types:
+When external MCP access is enabled, the fixed NodePorts use
+`loadBalancerSourceRanges`. The cluster's Cilium configuration must enable
+`bpf.lbSourceRangeAllTypes` to enforce those ranges on NodePort traffic. Manage
+that prerequisite through the cluster's configuration workflow while preserving
+existing LAN clients and routes.
 
-```bash
-CILIUM_VERSION="$(
-  helm list -n kube-system --filter '^cilium$' -o json |
-    jq -r '.[0].chart | sub("^cilium-"; "")'
-)"
-
-helm upgrade cilium cilium/cilium \
-  --namespace kube-system \
-  --version "${CILIUM_VERSION}" \
-  --reuse-values \
-  --set bpf.lbSourceRangeAllTypes=true \
-  --atomic --wait
-```
-
-Use the exact installed Cilium version. After internal provider and consumer
-checks pass, run `make enable-external-mcp`. The intentionally unclaimed load
-balancer class prevents an address controller from advertising the Service
-while retaining fixed, CIDR-restricted NodePorts. Because that Service never
-receives load-balancer ingress status, this target verifies the Deployment
-rollout and the exact NodePort, source range, Cilium annotation, and session
-affinity directly instead of waiting for an ingress address.
+After internal provider and consumer checks pass, `make enable-external-mcp`
+reconciles the external Services. Persist `MCP_EXTERNAL_ENABLED=true` and the
+approved ports/CIDR in the root `.env` so later updates preserve access. The
+unclaimed load-balancer class retains fixed NodePorts without requesting a
+separate advertised address. The target checks the Deployment rollout and
+Service fields directly, including port, source range, and Cilium annotation.
+Those checks do not replace an authenticated API probe from a non-node LAN client.
 
 ## Deploy and Update
 
@@ -335,56 +348,47 @@ because those applications share `daedalus`. Disabled replicas remain disabled.
 URL-ingest runs a small status/metrics service and five daily CronJobs.
 Use `update` to reconcile templates; `refresh-run` starts explicit data work.
 
-After the new stack, fresh corpus, Agent consumer path, schedules, and external
-MCP endpoints have all passed acceptance, the one-time legacy cleanup is:
-
-```bash
-CONFIRM_LEGACY_CLEANUP=delete-legacy-daedalus-context make cleanup-legacy
-```
-
-The command targets only `daedalus-hindsight`, `milvus`,
-`daedalus-retriever`, `nv-ingest`, `k8s-mcp-server`, and
-`unifi-network-mcp-server`, plus the old
-`k8s-mcp-server-readonly` cluster role/binding. Before wiping any retained
-local-etcd directory it snapshots the PV/node/path tuple, requires the old
-claim to be gone and the PV to be Released or Available, rejects attachments,
-symlinks, mountpoints, and paths outside the exact local-etcd PVC prefix.
-
 Each component is an ordinary Helm release and can be inspected with familiar
 commands such as `helm status`, `helm get values`, and `helm get manifest` in
-the `daedalus` namespace. See `helm/README.md` for release names, direct Helm
-commands, values, and Secret contracts. The root workflow remains the canonical
-way to preserve dependency order and safety gates.
+the `daedalus` namespace. The [stack model](#stack-model) lists the owning
+service folders and charts. The root workflow preserves dependency order and
+safety gates.
 
 ## Data Operations
 
-Data changes are separate from service deployment.
+Data changes are separate from service deployment. Set `CORPUS_GENERATION` to
+a unique source revision or digest when publishing PDFs, and specify
+`COLLECTIONS` when submitting refresh work:
 
 ```bash
-# Publish PDFs, stage URL inputs, ingest all collections, wait, and verify.
-make seed-data CORPUS_GENERATION=release-2026-08-09
+# Publish and select a verified PDF generation.
+make publish-corpus CORPUS_GENERATION=corpus-v1
 
-# Publish a verified PDF generation and atomically select it.
-make publish-corpus CORPUS_GENERATION=release-2026-08-09
+# Submit resumable refresh Jobs using the deployed source/model contract.
+make refresh-run COLLECTIONS="nvidia kubernetes"
+make refresh-status
 
-# Publish PDFs and stage URL inputs without submitting documents.
-make stage-data CORPUS_GENERATION=release-2026-08-09
-
-# Resume selected staged collections. Previously successful files are skipped.
-make run-ingest COLLECTIONS="nvidia kubernetes"
+# Submit a retrieval acceptance Job after refresh has completed.
+make refresh-verify
 ```
 
-`pdf-server` solely owns PDF Kubernetes resources and corpus publication.
-`url-ingest` consumes the selected corpus generation and owns its CronJobs,
-manifests, and ingestion Jobs. Scheduled and manual ingestion share a capacity
-semaphore on the manifest PVC. `URL_INGEST_GLOBAL_CAPACITY` controls scheduled
-jobs and defaults to one; manual runs use `MAX_PARALLEL_INGEST_SHARDS` for both
-their shard batch size and immutable Job slot count. Keep the two values within
-the capacity of the shared extraction services. After a fresh seed and
-collection validation, run `make enable-schedules`.
+`make stage-data` publishes the PDF corpus; URL sources are fetched by the
+refresh worker. `make seed-data` publishes PDFs and submits refresh Jobs for
+`COLLECTIONS`. `make run-ingest` is an alias for `refresh-run`. Refresh submission
+and verification commands return after creating Jobs; inspect their completion
+and reports separately. No collections are selected when `COLLECTIONS` is empty.
 
-Normal seed and resume operations never drop a Milvus collection. Do not delete
-PVCs or collections to diagnose persistence.
+`pdf-server` owns corpus publication and its Kubernetes resources. `url-ingest`
+consumes the selected corpus and owns refresh Jobs, schedules, and durable
+source state. Scheduled and manual refresh Jobs use the same collection locks
+and shared manifest-PVC capacity slots. `URL_INGEST_GLOBAL_CAPACITY` configures
+the capacity of deployed CronJobs, which manual refresh Jobs inherit.
+
+After initial collection acceptance, use `make enable-schedules` and persist
+`URL_INGEST_SUSPEND=false` in `.env`. Normal refresh operations preserve existing
+collections and reconcile changed sources. Do not delete PVCs or collections to
+diagnose persistence. See [URL ingestion](url-ingest/README.md) for source,
+retry, and freshness behavior.
 
 ## Daedalus Integration
 
@@ -402,11 +406,15 @@ Secret-management path. Do not edit
 The native Daedalus reranker endpoint is `/rerank`. NIM-compatible clients use
 `/v1/ranking`. Keep those contracts distinct.
 
-The reranker uses `nvidia/Nemotron-3.5-Rerank-8B-BF16` through a vLLM 0.32.0
-classification adapter, retaining both ranking contracts and the previous
-model ID as a compatibility alias. The embedder keeps its existing model and
-runtime. See `nemotron-retriever/README.md` for the pinned checkpoint, 40 GiB
-cache requirement, and rollout checks.
+The embedding model, dimensions, database, and ranking contracts are declared
+in [stack/rag-schema.yaml](stack/rag-schema.yaml). The serving configuration is
+in [nemotron-retriever/values.yaml](nemotron-retriever/chart/values.yaml). Keep query
+and document embeddings in the same vector space and match each collection's
+index metric. Curated-domain indexes use `COSINE`.
+
+Reranker scores are raw logits, which can be negative. A probability-based
+minimum-score threshold is inappropriate unless calibrated for the selected
+model. Reranking remains optional under the topology's failure policy.
 
 ## Health and Diagnostics
 
@@ -431,7 +439,7 @@ preflight:
 make preflight
 scripts/contextctl health-stack \
   --environment "$ENVIRONMENT" \
-  --components milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
+  --components hindsight milvus retriever nv-ingest pdf-server url-ingest k8s-mcp unifi-mcp
 ```
 
 The direct command exits:
@@ -460,7 +468,7 @@ make restart EXPECTED_CONTEXT=kubernetes-admin@kubernetes COMPONENTS="pdf-server
 ```
 
 Restart discovers Deployments and StatefulSets using Helm release ownership,
-including MinIO's older labels. It restarts stateful dependencies first, waits
+including the labels used by the MinIO subchart. It restarts stateful dependencies first, waits
 for each rollout, and then restarts Deployments. It refuses missing releases,
 missing/unbound storage, unavailable fixed-host volumes, paused workloads,
 partitioned/OnDelete StatefulSets, and stateful pods stranded on unavailable
@@ -477,8 +485,8 @@ installs a release, changes credentials, deletes claims, or seeds data.
 
 ### Automatic recovery and its limits
 
-Deployment controllers already replace pods after node-loss eviction. Milvus,
-PDF, and MCP topology spread now honors node taints so unavailable nodes do not
+Deployment controllers replace pods after node-loss eviction. Milvus,
+PDF, and MCP topology spread honors node taints so unavailable nodes do not
 keep replacement pods Pending solely to satisfy spread. Existing probes and
 controllers handle process restarts. Replacements still require compatible
 CPU/GPU capacity, reachable dependencies, and accessible storage.
@@ -507,28 +515,28 @@ Local volumes remain tied to their original node even after pod deletion:
 | Service | Current storage/failover boundary |
 | --- | --- |
 | Milvus etcd | Three members on `local-etcd`; two can retain quorum after one node loss, but the lost member needs its node/data restored or a reviewed membership replacement |
-| Hindsight PostgreSQL | Single database on `local-etcd`; automatic cross-node recovery requires database replication or a reviewed migration to suitable shared/replicated storage |
+| Hindsight PostgreSQL | Single database on `local-etcd`; cross-node recovery requires database replication or accessible replicated storage |
 | NV-Ingest Redis | Fixed primary and replica on `local-fast`; a replica alone does not provide automatic primary promotion |
 | Retriever | Replacement requires eligible GPU/CPU capacity and accessible model cache |
 | MinIO, PDF corpus, URL manifests | Shared NFS claims can be reused on another node while NFS remains available |
 
 Do not change a bound claim's storage class or PV node affinity to make local
 data appear portable. Full automatic recovery for this stack requires a
-separate backed-up migration/replication plan for PostgreSQL and Redis and a
-fencing controller. These Makefile and placement changes do not claim HA or a
-tested recovery-time objective. Use `make health-dependencies` and
+storage replication and recovery plans for PostgreSQL and Redis, plus a
+fencing controller. Replica placement alone does not establish HA or a tested
+recovery-time objective. Use `make health-dependencies` and
 `make health-integration` after workloads recover to verify data and consumers.
 
 | Situation | Action |
 | --- | --- |
 | A release failed | Read the operation JSON, repair the failed component, and rerun the same root target |
 | A collection Job failed | Check `make refresh-status`; retries are automatic. `make refresh-run COLLECTIONS="<name>"` resumes committed progress |
-| Source URLs changed | Run `make stage-data`, then ingest only affected collections |
+| Source URLs changed | Update the source lists, reconcile `url-ingest` to regenerate its contract, then refresh affected collections |
 | PDFs changed | Publish a new corpus generation, then ingest affected collections |
 | Existing retrieval failed | Check Milvus counts and retriever health before involving ingestion |
 | New ingestion failed | Check NV-Ingest, Redis, MinIO, Milvus, and retriever dependencies |
 | Daedalus cannot list MCP tools | Check provider Deployment, Service, current/next token, generated URL, and consumer probe |
-| A full collection rebuild is required | Back up Milvus, drain ingestion, and use the reviewed component recovery procedure |
+| A full collection rebuild is required | Prepare a separately authorized backup and recovery plan; preserve the active vector space until replacement retrieval is verified |
 
 Use `nim-milvus-ms/reset-etcd.sh` only after backup review and its explicit
 confirmation. Never use destructive cleanup as a routine health check.
@@ -538,18 +546,24 @@ confirmation. Never use destructive cleanup as a routine health check.
 Use component-local tests when changing one service:
 
 ```bash
-cd k8s-multicluster-mcp && make check
-cd nv-ingest && PYTHONPATH=src:api/src:client/src pytest
-cd url-ingest && cargo test && cargo clippy -- -D warnings
-cd unifi-network-mcp && make test
+make -C k8s-multicluster-mcp check
+make -C nv-ingest test
+make -C url-ingest test
+make -C unifi-network-mcp test
+make -C pdf-server test
+make -C nemotron-retriever test
 ```
 
-Return to the root and run `make validate-local` before a stack-level handoff.
+`make validate-local` runs the full source, image, and chart checks, including
+Docker builds and validation in the adjacent Hindsight repository. Cluster-facing
+changes also need `make validate-cluster` with the approved context. For
+documentation-only edits, check links and command references; no cluster access
+or image build is needed.
 
 Codex automatically discovers the repository skill at
 `.agents/skills/operate-daedalus-context/`. Invoke it explicitly as
-`$operate-daedalus-context` when a task involves deployment, health, ingestion,
-or recovery.
+`$operate-daedalus-context` for repository or component code review, documentation
+alignment, bug fixes, deployment, health, ingestion, or recovery.
 
 ## Repository Hygiene
 
@@ -563,107 +577,43 @@ git diff --check
 Preserve unrelated work. Do not add generated datasets, downloaded URLs,
 caches, `.env` files, kubeconfigs, or credentials.
 
+Keep documentation focused on current behavior and reusable procedures. Put
+versions and environment settings in their canonical configuration files and
+link to them. Use Git history for completed reviews, incident reports, migration
+narratives, and changelog material; do not retain those as operating guides.
+
 ## Continuous refresh and embedding generations
 
-`helm/milvus` owns durable vector storage. `nim-milvus-ms` is a legacy wrapper;
-it does not schedule refreshes. `helm/url-ingest` owns the five daily refresh
-Jobs, persistent source manifests, retry policy, and freshness monitoring.
-`nemotron-retriever` serves the embedding and reranking APIs consumed by both
-refresh workers and daedalus-agent.
+The retrieval and source contracts are maintained in
+[stack/rag-schema.yaml](stack/rag-schema.yaml),
+[stack/collections.yaml](stack/collections.yaml), and the
+[URL-ingest chart values](url-ingest/chart/values.yaml). The root deployment
+renders them and the source lists into the refresh contract. Update these
+inputs instead of editing generated JSON alone. Model revisions, schedules,
+freshness limits, retries, and work budgets belong in those configuration files.
 
-The retrieval contract is `stack/rag-schema.yaml`; collection schedules and
-freshness limits are in `stack/collections.yaml`. The root deployment renders
-`helm/url-ingest/files/refresh-contract.json` from those files and the existing
-source lists. The active vector space uses the pinned
-`nvidia/Nemotron-3.5-Embed-1B-NVFP4` checkpoint, 2,048 normalized dimensions,
-and vLLM 0.32 with Marlin on L40S. The adapter sends native agent query messages
-and NV-Ingest-style document requests through the same `/v2/embed` prompt
-contract. The worker uses the pinned tokenizer directly with truncation and
-padding disabled, then makes 1,024-token chunks with 64-token overlap.
+NV-Ingest extracts content. The refresh worker chunks, embeds, and writes
+Milvus rows using the same embedding contract as Daedalus queries. Source hashes
+and deterministic chunk IDs make replacements resumable. New chunks must be
+visible before old chunks are removed; failed replacements preserve the
+previous document. HTTP validators avoid downloading unchanged content. Missing
+URLs require repeated removal evidence across the deletion grace period; a
+sitemap omission or unavailable PDF directory cannot justify deleting vectors.
 
-The current embedding generation is `nemotron35_nvfp4_20261020`. It was built
-and verified in a staging database, then promoted into `default`, the database
-supported by daedalus-agent. The five collection names remain `nvidia`,
-`kubernetes`, `vetpartner`, `semianalysis`, and `mentalhealth`. Old collections
-are retained in `legacy_pre_nemotron35_20261020` for rollback. Source fingerprints
-identify the model generation independently of its physical database. The
-consumer embedding model must match the active generation; `make render-agent-env`
-prints the model and supported database. Uploaded-document indexes from the old
-generation also require re-ingestion; their originals and old vectors are retained.
-The agent's curated-domain `search_params.metric_type` must be `COSINE`, matching
-the collection indexes. Its private-document search can use `search_params:
-{params: {}}` to let each collection supply its index metric; a hard-coded `L2`
-search fails against the curated cosine indexes.
-The new reranker returns raw logits, so the previous probability-based
-`reranker_min_score` cutoff must be unset until a threshold is calibrated for
-this model. Ranking still orders the passages and returns the configured top five.
+Each collection has a filesystem lock shared by scheduled and manual Jobs.
+Overlapping attempts report `skipped_active` without replacing the active
+worker's status. Host pacing and durable cooldowns survive retries. Partial,
+limited, failed, or pending-removal passes do not advance full-scan freshness.
+`REFRESH_LIMIT=1` bounds a smoke test but still writes data.
 
-NV-Ingest extracts documents; the refresh worker owns chunking, embedding, and
-Milvus writes. Source hashes and deterministic chunk IDs make retries idempotent.
-Every replacement chunk must be visible before old chunks are removed. A failed
-replacement keeps the previous version, and an interrupted partial replacement
-is reconciled on retry. HTTP validators avoid downloading unchanged content.
-Previously known URLs are checked even if omitted from a sitemap; removal
-requires repeated 404/410 observations at least 48 hours apart. PDF removals use
-the same grace period. A missing corpus directory is an error, not a deletion.
+Durable reports live under `refresh/<generation>/runs/<collection>/` and
+`refresh/<generation>/status/` on the manifest PVC. The monitor serves `/status`,
+`/metrics`, and `/readyz` at `url-ingest-monitor:8080`. Process readiness, Job
+completion, corpus freshness, and consumer retrieval are separate signals.
+Use [URL ingestion](url-ingest/README.md) for the maintained operational guide
+and [refresh diagnostics](.agents/skills/operate-daedalus-context/references/refresh-operations.md)
+for failure analysis.
 
-Schedules run daily at 02:00–06:00 UTC, with three Kubernetes retries and bounded
-HTTP retries. Shared filesystem locks release when a worker dies. PDFs are
-checked first; interrupted URL scans resume with the least recently attempted
-sources to prevent starvation. Previously failed sources and expired deletion
-grace periods take priority over new sources on the next pass. Workers checkpoint
-and finish a partial pass after a 21-hour work budget, leaving two hours before
-Kubernetes' 23-hour hard deadline for in-flight work to settle. Partial passes do
-not advance freshness. Large initial backfills may span multiple daily runs.
-An overlapping manual or scheduled attempt exits successfully with
-`state: skipped_active`; it does not replace the active worker's report or mark
-the collection fresh. This also covers manual backfills, which Kubernetes'
-CronJob concurrency policy does not track.
-
-Requests to each host are serialized and paced, including fast 304 responses.
-The default minimum interval is 0.5 seconds; SemiAnalysis starts at 5 seconds and
-the larger NVIDIA corpus uses 0.1 seconds.
-Repeated HTTP 403 responses, 429 throttling, and 503 responses activate a
-durable host cooldown that survives retry pods and honors `Retry-After`.
-Blocked hosts also increase their persistent request interval, up to 30 seconds.
-Errors are published immediately, and an active cooldown is explicitly unhealthy
-with a separate Prometheus alert; an old success cannot hide the block.
-NV-Ingest result requests use a bounded 10-minute read timeout for PDFs, allowing
-large manuals to finish extraction, while URL extraction retains a one-minute
-read timeout. Transport and Job retry limits still apply.
-Retries of the same Kubernetes Job reuse its successful source checks; a new
-daily Job revalidates them. HTTP access failures remain visible as failures.
-404/410 observations within the 48-hour deletion grace period appear as
-`pending_removals`, preserve existing vectors, and do not consume immediate
-Job retries. They do not advance the collection's freshness timestamp.
-
-```bash
-set -a; source .env; set +a
-export EXPECTED_CONTEXT='kubernetes-admin@kubernetes'
-make refresh-run COLLECTIONS="nvidia kubernetes vetpartner semianalysis mentalhealth"
-make refresh-status
-make refresh-verify  # starts a read-only retrieval acceptance Job
-make health-dependencies COMPONENTS=url-ingest
-```
-
-`REFRESH_LIMIT=1` runs a bounded smoke test and never marks a collection fresh.
-`run-ingest` delegates to the new reconciler; the legacy append-only runner is
-retired. Production `.env` must keep `URL_INGEST_SUSPEND=false` so upgrades do
-not accidentally disable automation. A new installation defaults to suspended
-until its model and corpus paths are validated.
-
-Reports live on the manifest PVC under `refresh/<generation>/runs/<collection>/`
-and `refresh/<generation>/status/`. Failure journals retain every source error;
-status responses include the first 100 errors at most. `url-ingest-monitor:8080`
-serves `/status`, `/metrics`, and `/readyz`. Process readiness is separate from
-corpus freshness. Prometheus alerts cover stale collections (36 hours), failures,
-lost worker heartbeats, suspended schedules, and missing monitoring. An initial
-or partially failed rebuild remains visibly unhealthy until a complete scan
-succeeds. Kubernetes Job TTL is 30 days; durable reports survive Job deletion.
-
-For a model migration, build and validate a new generation, verify retrieval,
-then archive the previous collections and promote the new generation into
-`default` while refresh writers are stopped. Update the consumer model together
-with promotion. Rollback reverses the recorded collection moves and restores
-the previous serving model; do not reset etcd,
-delete PVCs, or merge vectors from different models.
+A generation identifies the model and source-processing contract. The active
+database is selected by the retrieval schema. Never mix embeddings from
+different vector spaces or infer compatibility from matching dimensions alone.

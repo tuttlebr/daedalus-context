@@ -1,8 +1,0 @@
-service:
-  type: NodePort
-  nodePort: 30416
-
-minio:
-  service:
-    type: NodePort
-    nodePort: 30900

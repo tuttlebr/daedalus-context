@@ -8,7 +8,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CHART = ROOT / "helm/k8s-mcp-server"
+CHART = ROOT / "k8s-multicluster-mcp/chart"
 
 
 def render(*settings: str, values: Path | None = None) -> list[dict]:

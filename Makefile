@@ -53,24 +53,23 @@ MILVUS_RELEASE ?= milvus
 NV_INGEST_RELEASE ?= nv-ingest
 RETRIEVER_RELEASE ?= nemotron-retriever
 RETRIEVER_FULLNAME ?= nemotron-retriever
-RETRIEVER_CHART ?= $(ROOT_DIR)/nemotron-retriever
-MILVUS_CHART ?= $(ROOT_DIR)/helm/milvus
-NV_INGEST_CHART ?= $(ROOT_DIR)/helm/nv-ingest
-PDF_SERVER_CHART ?= $(ROOT_DIR)/helm/pdf-server
-URL_INGEST_CHART ?= $(ROOT_DIR)/helm/url-ingest
-K8S_MCP_CHART ?= $(ROOT_DIR)/helm/k8s-mcp-server
-UNIFI_MCP_CHART ?= $(ROOT_DIR)/helm/unifi-network-mcp-server
+RETRIEVER_CHART ?= $(ROOT_DIR)/nemotron-retriever/chart
+MILVUS_CHART ?= $(ROOT_DIR)/nim-milvus-ms/chart
+NV_INGEST_CHART ?= $(ROOT_DIR)/nv-ingest/chart
+PDF_SERVER_CHART ?= $(ROOT_DIR)/pdf-server/chart
+URL_INGEST_CHART ?= $(ROOT_DIR)/url-ingest/chart
+K8S_MCP_CHART ?= $(ROOT_DIR)/k8s-multicluster-mcp/chart
+UNIFI_MCP_CHART ?= $(ROOT_DIR)/unifi-network-mcp/chart
 HINDSIGHT_ROOT ?= $(abspath $(ROOT_DIR)/../daedalus-hindsight)
 HINDSIGHT_CHART ?= $(HINDSIGHT_ROOT)/charts/daedalus-hindsight
 HINDSIGHT_RELEASE ?= hindsight
 # Production-safe chart defaults are used unless the operator explicitly names
 # an override. NodePort examples are never auto-discovered.
-RETRIEVER_VALUES_FILE ?= nemotron-retriever/values-daedalus.yaml
+RETRIEVER_VALUES_FILE ?= nemotron-retriever/chart/values-daedalus.yaml
 RETRIEVER_ROLLOUT_TIMEOUT ?= 30m
 MILVUS_SERVICE ?= $(MILVUS_RELEASE)
 MINIO_SERVICE ?= $(MILVUS_RELEASE)-minio
 NV_INGEST_SERVICE ?= $(NV_INGEST_RELEASE)
-MILVUS_MINIO_SECRET_NAME ?= milvus-minio-credentials
 MILVUS_ROOT_SECRET_NAME ?= milvus-root-credentials
 # MinIO bulk data must not silently inherit the etcd-local class. Deployments
 # must select a reviewed storage class explicitly.
@@ -88,7 +87,6 @@ RERANKER_MODEL_NAME ?= nvidia/Nemotron-3.5-Rerank-8B-BF16
 
 override MILVUS_ENDPOINT := http://$(MILVUS_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:19530
 override MINIO_ENDPOINT := http://$(MINIO_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:9000
-MINIO_INGEST_ENDPOINT ?= $(patsubst https://%,%,$(patsubst http://%,%,$(MINIO_ENDPOINT)))
 override NV_INGEST_ENDPOINT := http://$(NV_INGEST_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local:7670
 override HINDSIGHT_API_URL := http://hindsight-api.$(DAEDALUS_NAMESPACE).svc.cluster.local:8888
 override NV_INGEST_MESSAGE_HOST := $(NV_INGEST_SERVICE).$(DAEDALUS_NAMESPACE).svc.cluster.local
@@ -118,11 +116,8 @@ NV_INGEST_PARSER_IMAGE ?= daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
 LOCAL_DOCUMENT_PARSE_ENDPOINT ?= http://nv-ingest-parser.$(DAEDALUS_NAMESPACE).svc.cluster.local:8000
 MINIO_BUCKET ?= nv-ingest
 URL_INGEST_SOURCE_NODE ?= daedalus-01
-NVIDIA_INGEST_SHARDS ?= 8
-MAX_PARALLEL_INGEST_SHARDS ?= 1
 URL_INGEST_GLOBAL_CAPACITY ?= 1
 INGEST_JOB_DEADLINE_SECONDS ?= 21600
-INGEST_WAIT_TIMEOUT_SECONDS ?= 22200
 URL_INGEST_RUNNING_GRACE_SECONDS ?= 86400
 REQUIRED_COLLECTIONS ?= nvidia kubernetes vetpartner semianalysis mentalhealth
 PDF_SERVER_IMAGE ?= daedalus.ddns.me:5050/btuttle/pdf-server:$(DAEDALUS_CONTEXT_IMAGE_VERSION)
@@ -134,18 +129,8 @@ CORPUS_GENERATION ?=
 
 # Build and publish are deliberately separate from deployment. Both deploy and
 # update reconcile an already-published SemVer image release.
-UPDATE_BUILD_IMAGES ?= false
-UPDATE_PUSH_IMAGES ?= false
 EXPOSE_NODEPORTS ?= false
 ENABLE_MILVUS_MONITORING ?= false
-NV_INGEST_SERVICE_TYPE ?= ClusterIP
-NV_INGEST_NODE_PORT ?=
-# Leave empty for authenticated external NVCF endpoints: NV-Ingest's optional
-# component readiness parser expects each dependency's unauthenticated
-# /health/ready endpoint to return its native JSON schema. The ingestion
-# preflight and real seed Jobs exercise those configured endpoints instead.
-NV_INGEST_COMPONENTS_TO_READY_CHECK ?=
-ALLOW_NV_INGEST_DEPLOY_DURING_INGEST ?= false
 CHECK_CONSUMER ?= true
 CONSUMER_RETRIES ?= 2
 
@@ -209,7 +194,7 @@ $(CLUSTER_TARGETS): | require-context
 refresh-run refresh-status refresh-verify: | require-context
 REFRESH_LIMIT ?= 0
 MILVUS_DATABASE ?= default
-refresh-run: ## [data write] Resume daily refresh; COLLECTIONS selects corpora, REFRESH_LIMIT bounds a smoke test.
+refresh-run: ## [cluster/data write] Submit refresh Jobs for COLLECTIONS; REFRESH_LIMIT bounds data work. Does not wait.
 	@for collection in $(COLLECTIONS); do \
 	  DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
 	  python3 "$(ROOT_DIR)/scripts/refresh_job.py" --collection "$$collection" --limit "$(REFRESH_LIMIT)"; \
@@ -219,7 +204,7 @@ refresh-status: ## [read-only cluster] Read persistent collection refresh status
 	@$(KUBECTL) -n "$(DAEDALUS_NAMESPACE)" exec deployment/url-ingest-monitor -- \
 	  python3 -c 'import json,urllib.request; print(json.dumps(json.load(urllib.request.urlopen("http://localhost:8080/status")),indent=2))'
 
-refresh-verify: ## [cluster write, data read-only] Run a Job checking the active model and all five collections.
+refresh-verify: ## [cluster write, data read-only] Submit a model/retrieval verification Job; inspect completion separately.
 	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
 	  python3 "$(ROOT_DIR)/scripts/refresh_job.py" --collection kubernetes --verify
 
@@ -277,8 +262,6 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 	  'reranker model' '$(RERANKER_MODEL_NAME)' \
 	  'daedalus reranker API' '$(DAEDALUS_RERANKER_ENDPOINT)' \
 	  'NIM reranker API' '$(NIM_RERANKER_ENDPOINT)' \
-	  'NVIDIA ingest shards' '$(NVIDIA_INGEST_SHARDS)' \
-	  'manual shard parallelism' '$(MAX_PARALLEL_INGEST_SHARDS)' \
 	  'scheduled ingest capacity' '$(URL_INGEST_GLOBAL_CAPACITY)' \
 	  'seed source node' '$(URL_INGEST_SOURCE_NODE)' \
 	  'pdf-server namespace' '$(PDF_SERVER_NAMESPACE)' \
@@ -530,7 +513,7 @@ deploy-milvus:
 	@[[ -n "$(MINIO_STORAGE_CLASS)" ]] || { echo 'MINIO_STORAGE_CLASS is required.' >&2; exit 1; }
 	@$(HELM) upgrade --install "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
-	  --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" \
+	  --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" \
 	  --set-string milvus.minio.persistence.storageClass="$(MINIO_STORAGE_CLASS)" \
 	  --set-string milvus.etcd.persistence.storageClass="$(ETCD_STORAGE_CLASS)" \
 	  --set milvus.metrics.serviceMonitor.enabled="$(ENABLE_MILVUS_MONITORING)" \
@@ -1020,39 +1003,17 @@ healthcheck-unifi-mcp: health-provider-unifi-mcp health-dependencies-unifi-mcp $
 ##@ Data operations
 
 publish-corpus: preflight ## [data write] Publish and atomically select a PDF corpus generation.
-	@cd "$(ROOT_DIR)/pdf-server" && \
-	  TARGET=kubernetes NAMESPACE="$(PDF_SERVER_NAMESPACE)" PUBLISH_CORPUS=true PUBLISH_ONLY=true \
-	  AGENT_NAMESPACE="$(AGENT_NAMESPACE)" URL_INGEST_NAMESPACE="$(URL_INGEST_NAMESPACE)" \
-	  PDF_SERVER_IMAGE="$(PDF_SERVER_IMAGE)" PDF_STORAGE_CLASS="$(PDF_STORAGE_CLASS)" \
-	  PDF_STORAGE_SIZE="$(PDF_STORAGE_SIZE)" PDF_SOURCE_HOST_PATH="$(PDF_SOURCE_HOST_PATH)" \
+	@NAMESPACE="$(PDF_SERVER_NAMESPACE)" PDF_SOURCE_HOST_PATH="$(PDF_SOURCE_HOST_PATH)" \
 	  PDF_SOURCE_NODE="$(PDF_SOURCE_NODE)" CORPUS_GENERATION="$(CORPUS_GENERATION)" \
-	  ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" bash deploy.sh
+	  bash "$(ROOT_DIR)/pdf-server/publish-corpus.sh"
 
-define run_ingest_operation
-	@cd "$(ROOT_DIR)/url-ingest" && \
-	  NAMESPACE="$(URL_INGEST_NAMESPACE)" MILVUS_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  NV_INGEST_NAMESPACE="$(NV_INGEST_NAMESPACE)" ROLLOUT_TIMEOUT="$(ROLLOUT_TIMEOUT)" \
-	  MILVUS_SERVICE="$(MILVUS_SERVICE)" MINIO_SERVICE="$(MINIO_SERVICE)" \
-	  NV_INGEST_SERVICE="$(NV_INGEST_SERVICE)" MILVUS_URI="$(MILVUS_ENDPOINT)" \
-	  MINIO_ENDPOINT="$(MINIO_INGEST_ENDPOINT)" MINIO_BUCKET="$(MINIO_BUCKET)" \
-	  NV_INGEST_MESSAGE_HOST="$(NV_INGEST_MESSAGE_HOST)" NV_INGEST_MESSAGE_PORT="$(NV_INGEST_MESSAGE_PORT)" \
-	  NV_INGEST_VERSION="$(NV_INGEST_VERSION)" MINIO_SOURCE_SECRET_NAMESPACE="$(MILVUS_NAMESPACE)" \
-	  MINIO_SOURCE_SECRET_NAME="$(MILVUS_MINIO_SECRET_NAME)" \
-	  MILVUS_ROOT_SECRET_NAME="$(MILVUS_ROOT_SECRET_NAME)" URL_INGEST_SOURCE_NODE="$(URL_INGEST_SOURCE_NODE)" \
-	  NVIDIA_INGEST_SHARDS="$(NVIDIA_INGEST_SHARDS)" \
-	  MAX_PARALLEL_INGEST_SHARDS="$(MAX_PARALLEL_INGEST_SHARDS)" \
-	  INGEST_JOB_DEADLINE_SECONDS="$(INGEST_JOB_DEADLINE_SECONDS)" \
-	  INGEST_WAIT_TIMEOUT_SECONDS="$(INGEST_WAIT_TIMEOUT_SECONDS)" \
-	  bash k8s/deploy.sh --data-only $(1)
-endef
-
-stage-data: publish-corpus ## [data write] Publish PDFs and stage URL inputs without ingesting them.
+stage-data: publish-corpus ## [data write] Publish PDFs; URL inputs are fetched by refresh workers.
 	@echo 'PDF corpus published. URL sources are fetched conditionally by refresh-run.'
 
-seed-data: publish-corpus ## [data write] Publish, stage, ingest, wait, and verify collections.
+seed-data: publish-corpus ## [cluster/data write] Publish PDFs and submit refresh Jobs for COLLECTIONS. Does not wait.
 	@$(MAKE) --no-print-directory refresh-run COLLECTIONS="$(COLLECTIONS)"
 
-run-ingest: refresh-run ## [data write] Resume the contract-based refresh for selected collections.
+run-ingest: refresh-run ## [cluster/data write] Alias for refresh-run; submit Jobs for selected COLLECTIONS.
 
 ##@ Validation and integration
 
@@ -1067,7 +1028,7 @@ validate-helm: ## [read-only local] Validate topology contracts and all eight He
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(ROOT_DIR)/scripts/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-	  -s "$(RETRIEVER_CHART)/tests" >/dev/null
+	  -s "$(ROOT_DIR)/nemotron-retriever/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(ROOT_DIR)/url-ingest/tests" -p 'test_refresh*.py' >/dev/null
 	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null
@@ -1076,7 +1037,7 @@ validate-helm: ## [read-only local] Validate topology contracts and all eight He
 	  $(HELM) lint "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null; \
 	done
 	@rendered="$$(mktemp)"; trap 'rm -f "$$rendered"' EXIT; \
-	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" >>"$$rendered"; \
+	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" >>"$$rendered"; \
 	  $(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
 	    --values "$(RETRIEVER_VALUES_FILE)" >>"$$rendered"; \
 	  $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
@@ -1098,13 +1059,8 @@ validate-local: validate-helm ## [read-only local] Run full source, image, and c
 	@bash -n \
 	  "$(ROOT_DIR)/scripts/image-reference.sh" \
 	  "$(ROOT_DIR)/scripts/check_url_ingest_freshness.sh" \
-	  "$(ROOT_DIR)/k8s-multicluster-mcp/deploy.sh" \
-	  "$(ROOT_DIR)/unifi-network-mcp/deploy.sh" \
-	  "$(ROOT_DIR)/nim-milvus-ms/deploy.sh" \
-	  "$(ROOT_DIR)/nv-ingest/deploy.sh" \
-	  "$(ROOT_DIR)/pdf-server/deploy.sh" \
-	  "$(ROOT_DIR)/url-ingest/k8s/deploy.sh" \
-	  "$(ROOT_DIR)/url-ingest/k8s/lib/job-control.sh"
+	  "$(ROOT_DIR)/pdf-server/publish-corpus.sh" \
+	  "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh"
 	@source "$(ROOT_DIR)/scripts/image-reference.sh"; \
 	  require_semver_image_ref "validation image" "example.invalid/service:v1.2.3-rc.1"; \
 	  ! require_semver_image_ref "validation image" "example.invalid/service:latest" >/dev/null 2>&1; \
@@ -1115,11 +1071,8 @@ validate-local: validate-helm ## [read-only local] Run full source, image, and c
 	  "$(ROOT_DIR)/scripts/check_cluster_capacity.py" \
 	  "$(ROOT_DIR)/scripts/check_mcp_contract.py" \
 	  "$(ROOT_DIR)/scripts/check_retriever_contract.py" \
-	  "$(ROOT_DIR)/url-ingest/nv-ingest-ms-tasks.py" \
-	  "$(ROOT_DIR)/url-ingest/k8s/normalize-manifest.py" \
-	  "$(ROOT_DIR)/url-ingest/k8s/render-manual-job.py"
+	  "$(ROOT_DIR)/url-ingest/nv-ingest-ms-tasks.py"
 	@cd "$(ROOT_DIR)/url-ingest" && python3 -m unittest discover -s tests >/dev/null
-	@cd "$(ROOT_DIR)/nv-ingest" && bash tests/test-deploy.sh >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$(ROOT_DIR)/nv-ingest/tests" >/dev/null
 	@cd "$(ROOT_DIR)/pdf-server" && \
 	  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests >/dev/null
@@ -1144,7 +1097,7 @@ validate-cluster: preflight validate-helm ## [read-only cluster] Validate Helm m
 	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py"
 	@$(HELM) template "$(HINDSIGHT_RELEASE)" "$(HINDSIGHT_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
 	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/helm/milvus/post-render.py" | \
+	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" | \
 	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
 	@$(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --values "$(RETRIEVER_VALUES_FILE)" | \

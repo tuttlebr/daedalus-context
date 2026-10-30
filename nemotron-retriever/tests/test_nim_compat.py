@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 
-MODULE_PATH = pathlib.Path(__file__).parents[1] / "files" / "nim_compat.py"
+MODULE_PATH = pathlib.Path(__file__).parents[1] / "chart" / "files" / "nim_compat.py"
 SPEC = importlib.util.spec_from_file_location("nim_compat", MODULE_PATH)
 nim_compat = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

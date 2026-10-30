@@ -48,8 +48,8 @@ ready_nodes = {
 }
 
 milvus = yaml.safe_load(
-    (ROOT / "nim-milvus-ms" / "custom-values.yaml").read_text(encoding="utf-8")
-)
+    (ROOT / "nim-milvus-ms/chart/values.yaml").read_text(encoding="utf-8")
+)["milvus"]
 required_general_domains = max(
     milvus[role]["replicas"]
     for role in ("proxy", "queryNode", "dataNode", "streamingNode", "mixCoordinator")
@@ -61,7 +61,7 @@ if len(ready_nodes) < required_general_domains:
     )
 
 retriever = yaml.safe_load(
-    (ROOT / "nemotron-retriever" / "values.yaml").read_text(encoding="utf-8")
+    (ROOT / "nemotron-retriever" / "chart" / "values.yaml").read_text(encoding="utf-8")
 )
 topology = yaml.safe_load(
     (ROOT / "stack" / "topology.yaml").read_text(encoding="utf-8")

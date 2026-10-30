@@ -116,7 +116,7 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
     if contracts[native_profile]["path"] == contracts[nim_profile]["path"]:
         raise ValueError("native and NIM reranker endpoint paths must remain distinct")
 
-    retriever_values = load_yaml(ROOT / "nemotron-retriever" / "values.yaml")
+    retriever_values = load_yaml(ROOT / "nemotron-retriever" / "chart" / "values.yaml")
     for role, contract_key in (("embedder", "embedding"), ("reranker", "reranker")):
         expected = rag[contract_key]
         actual = retriever_values[role]
@@ -131,7 +131,7 @@ def validate_contracts(environment_name: str, require_ha: bool) -> list[str]:
             if locked_model[field] != expected_value:
                 raise ValueError(f"locked {contract_key} {field} differs from rag-schema.yaml")
 
-    url_ingest_values = load_yaml(ROOT / "helm" / "url-ingest" / "values.yaml")
+    url_ingest_values = load_yaml(ROOT / "url-ingest" / "chart" / "values.yaml")
     chart_collections = url_ingest_values["collections"]
     for item in collections["collections"]:
         alias = item["alias"]

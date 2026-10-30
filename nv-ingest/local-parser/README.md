@@ -8,7 +8,7 @@ and official postprocessing helpers. Tables retain HTML spans and reading order.
 
 Daedalus inline attachments, Markdown downloads, uploaded knowledge-base
 documents, and scheduled PDF ingestion continue to use NV-Ingest. The
-[PDF engine](../../helm/nv-ingest/files/local_pdf.py) renders every page and calls
+[PDF engine](../chart/files/local_pdf.py) renders every page and calls
 the internal parser. Both the `pdfium` and `nemotron_parse` engine entry points
 are replaced for the pinned NV-Ingest 26.3 image; Office `render_as_pdf` uses the
 same engine. Plain text and HTML retain their normal NV-Ingest handling.

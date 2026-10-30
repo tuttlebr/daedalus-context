@@ -1,6 +1,10 @@
 # UniFi Network MCP Server
 
-[Model Context Protocol](https://modelcontextprotocol.io/) server for the local UniFi Network integration API on a UDM/UniFi console. It exposes the complete 73-operation surface documented by the supplied [UniFi Network 10.5.67 API capture](./UniFi-Network-API.md) and authenticates to UniFi with `X-API-KEY`. Typed request schemas come from the checksum-pinned [UniFi Network 10.4.57 OpenAPI contract](https://developer.ui.com/network/v10.4.57/openapi.json), whose method, path, and operation ID set matches the 10.5.67 capture.
+A Model Context Protocol server for the local UniFi Network integration API.
+It authenticates to the controller with `X-API-KEY`. Tool operations and typed
+request schemas follow the checksum-pinned
+[OpenAPI contract](network_v10.4.57_openapi.json), embedded by
+[src/pkg/unifi/contract.go](src/pkg/unifi/contract.go).
 
 By default the server starts without a UniFi device URL, API key, or device credentials. MCP clients can provide `baseUrl` and `apiKey` on each tool call, or private deployments can configure server-side defaults with environment variables.
 
@@ -23,7 +27,8 @@ Validation and health checks use `GET /v1/info`; the test suite uses local test 
 
 ## Validate UniFi API Access
 
-Generate an API key at [unifi.ui.com](https://unifi.ui.com/) (Settings → API Keys), then make one safe read-only request directly to the local Network integration API:
+Provision a controller API key through its administration interface, then
+verify access with a read-only request to the local integration API:
 
 ```bash
 curl --fail --silent --show-error \
@@ -74,7 +79,6 @@ Example tool-call arguments for `listSites`:
 {
   "baseUrl": "https://<unifi-console>/proxy/network/integration",
   "apiKey": "YOUR_API_KEY",
-  "insecureSkipVerify": true,
   "limit": 25
 }
 ```
@@ -105,13 +109,15 @@ Mutation tools accept a `body` object when the API operation defines a request b
 | - | `UNIFI_API_KEY` | empty | Optional server default for `apiKey`; use only for private/trusted deployments |
 | - | `UNIFI_FIXED_CONTROLLER` | `false` | Remove per-call controller/key/TLS overrides from tool schemas and reject supplied overrides |
 
-Every UniFi tool accepts these connection arguments. `baseUrl` and `apiKey` are required only when no server-side default is configured.
+When fixed-controller mode is disabled, tools accept the connection arguments
+below. `baseUrl` and `apiKey` are required only without server defaults.
+Fixed-controller mode rejects controller, credential, and TLS overrides.
 
 | Argument | Required | Description |
 | --- | --- | --- |
 | `baseUrl` | yes | UniFi Network local integration API base URL, such as `https://<unifi-console>/proxy/network/integration` |
 | `apiKey` | yes | UniFi integration API key sent as `X-API-KEY` |
-| `insecureSkipVerify` | no | Set `true` only for self-signed local console certificates |
+| `insecureSkipVerify` | no | Disables TLS verification; prefer a trusted private CA bundle |
 | `timeoutSeconds` | no | Per-call outbound timeout, default `30`, max `120` |
 
 Endpoint-specific path/query arguments and mutation `body` schemas are included directly in each MCP tool definition.
@@ -129,27 +135,30 @@ Kubernetes is the supported runtime deployment path.
 
 ## Kubernetes Deployment
 
-Set distinct `UNIFI_MCP_AUTH_TOKEN`, a SemVer-tagged `UNIFI_MCP_IMAGE`,
-`UNIFI_BASE_URL`, `UNIFI_API_KEY`, and the exact `UNIFI_CONTROLLER_CIDR` in
-`.env`. Production enables fixed-controller mode and restricts egress to that
-CIDR.
+Use the [root configuration setup](../README.md#configuration) and run from
+the repository root:
 
 ```bash
-cp ../.env.example ../.env
-# Edit the required UNIFI_* values and image version.
-./deploy.sh
+make deploy COMPONENTS=unifi-mcp
+make health-provider COMPONENTS=unifi-mcp
+make health-dependencies COMPONENTS=unifi-mcp
+make health-integration COMPONENTS=unifi-mcp
 ```
 
-The default manifest creates a two-replica Deployment, PDB, hard hostname
-spread, default-deny policy, and authenticated fixed NodePort on `30081` in
-namespace `unifi-network-mcp-server`. Its Cilium policy permits NodePort
-forwarding, while the NodePort-backed `LoadBalancer` Service restricts external
-sources to `MCP_EXTERNAL_CLIENT_CIDR` (default `192.168.1.0/24`) and bearer
-authentication remains mandatory. The deploy wrapper fails closed unless Cilium has
-`bpf.lbSourceRangeAllTypes=true`, which is required to enforce that allow-list
-for NodePort traffic. The unclaimed `daedalus.ai/nodeport-only` class prevents
-MetalLB from assigning a separate address. Config and token checksums roll pods
-only when effective configuration changes.
+The [Helm chart](chart/README.md) deploys to `daedalus`
+with fixed-controller mode, existing auth/controller Secrets, verified TLS,
+and restricted controller egress. Configure `UNIFI_BASE_URL`,
+`UNIFI_CONTROLLER_CIDR`, and the published `UNIFI_MCP_IMAGE` in the root `.env`.
+For private certificates, use `UNIFI_CONTROLLER_CA_FILE` and a hostname matching
+the certificate; the root workflow also supports explicit hostname/IP mapping.
+
+The in-cluster MCP endpoint is
+`http://unifi-network-mcp-server.daedalus.svc.cluster.local:8080/mcp`.
+External exposure defaults off. When enabled, the root workflow preserves the
+configured fixed NodePort and client CIDR; see the
+[external MCP prerequisite](../README.md#external-mcp-network-prerequisite).
+Verify existing ordinary LAN clients after network changes. Use root deployment
+targets and `make render` in this folder for local chart inspection.
 
 ## Development
 
@@ -159,6 +168,6 @@ make build
 ```
 
 The tests compare all 73 MCP operations and parameters with
-`network_v10.4.57_openapi.json`, verify the embedded contract byte-for-byte,
+the pinned OpenAPI artifact, verify the embedded contract byte-for-byte,
 exercise mutation request/response handling against local TLS servers, and
 ensure the complete serialized tool registry remains bounded.

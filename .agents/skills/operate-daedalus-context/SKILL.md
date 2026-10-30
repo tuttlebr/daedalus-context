@@ -1,13 +1,14 @@
 ---
 name: operate-daedalus-context
-description: Operate and diagnose the Daedalus context Kubernetes stack, including releases, recovery, continuous refresh, and Daedalus integration. Use for root operational workflows and changes to their contracts; keep this guidance aligned with verified repository changes. Excludes isolated component edits with no operational impact.
+description: Review, diagnose, and remediate the Daedalus context codebase and operate its Kubernetes stack. Use for repository or component code and documentation reviews, bug fixes, releases, recovery, refresh, and Daedalus integration.
 ---
 
 # Operate Daedalus Context
 
-Use the repository's root contracts and Make targets. Kubernetes is the only
-runtime deployment path; `docker-compose.yaml` defines images for validation,
-building, and publishing.
+Cover root orchestration, component implementation, configuration, and tests
+within the requested scope. Use the repository's root contracts and Make
+targets. Kubernetes is the only runtime deployment path;
+`docker-compose.yaml` defines images for validation, building, and publishing.
 
 ## Ground the Task
 
@@ -19,14 +20,39 @@ building, and publishing.
    [topology](../../../stack/topology.yaml), the selected file in
    [environments](../../../stack/environments/), and the
    [component lock](../../../stack/components.lock.yaml). Read applicable
-   component `AGENTS.md` files before editing their implementation.
-4. Determine whether the user requested diagnosis, source changes, a live
-   operation, data mutation, or registry publication, including authorization
-   already given in this conversation. Keep actions within that scope.
+   component `AGENTS.md` files before reviewing or editing their implementation.
+4. Determine whether the user requested review/diagnosis only, source
+   remediation, a live operation, data mutation, or registry publication,
+   including authorization already given in this conversation. A request to
+   review and fix authorizes in-scope source edits and local validation; it
+   does not authorize deployment, registry writes, or production data changes.
 
 Repository contracts and tested implementation determine current behavior. If
-this skill disagrees, verify the discrepancy and correct the stale guidance as
-part of the task; do not adapt the runtime to an outdated instruction.
+this skill disagrees, verify the discrepancy and correct the stale guidance
+when source edits are authorized; report it during review-only work. Do not
+adapt the runtime to an outdated instruction.
+
+For documentation alignment, describe current behavior and reusable procedures.
+Verify commands against their implementation, including submission versus
+completion and cluster-resource versus data effects. Link canonical configuration
+for versions and environment settings. Remove completed review reports, incident
+snapshots, changelog prose, and migration narratives; keep history in Git. Check
+callers before removing documents used as test fixtures, and preserve required
+contract evidence and third-party license notices.
+
+## Review Code and Remediate Bugs
+
+For full code review, focused diff/component review, bug investigation, or
+source remediation, read [Code review and remediation](references/code-review.md).
+It maps owned code and tests, establishes evidence for findings, and guides
+fixes through regression validation. A full review covers component internals
+and their integration contracts, not just deployment health. Keep focused
+requests focused; ordinary operations do not require a repository-wide audit.
+
+Review-only requests produce prioritized, actionable findings without editing
+repository files. When fixes are requested, carry confirmed in-scope defects
+through implementation and validation, preserving unrelated changes. Report
+remaining findings and validation limits explicitly.
 
 ## Select the Root Workflow
 
@@ -43,9 +69,12 @@ part of the task; do not adapt the runtime to an outdated instruction.
 - Use `make health-stack` for combined JSON. When exact exit codes matter, run
   `make preflight` and then call `scripts/contextctl health-stack` directly.
 - For refresh failures, stale collections, ingestion changes, or embedding
-  migrations, read [Refresh operations](references/refresh-operations.md).
+  contract changes, read [Refresh operations](references/refresh-operations.md).
   `make refresh-status` reads durable status; `make refresh-run` writes data;
   `make refresh-verify` creates a Kubernetes Job that reads retrieval data.
+  Submission returns before Job completion; inspect completion and reports
+  separately. `COLLECTIONS` is required to select refresh work. `seed-data`
+  publishes PDFs and submits refresh Jobs; `stage-data` publishes PDFs only.
 - Run `make publish-corpus`, `make stage-data`, `make seed-data`, or
   `make run-ingest` only when the user requested the corresponding data write.
 - Generate Daedalus consumer settings with `make render-agent-env`. Keep
@@ -60,8 +89,9 @@ existing dependencies are healthy before operating on a dependent alone.
 
 ## Enforce Safety Boundaries
 
-- Source the root `.env` with export enabled. Never print or commit its secret
-  values.
+- Before cluster operations, source the root `.env` with export enabled. Never
+  print or commit its secret values. Local code review does not require loading
+  production credentials.
 - Require an approved literal `EXPECTED_CONTEXT` for every Kubernetes command.
   Do not derive it from the active context in the same operation.
 - Preserve working LAN endpoints and consumer connections. Before changing
@@ -69,25 +99,29 @@ existing dependencies are healthy before operating on a dependent alone.
   rollback configuration. Obtain approval for a compatibility break. Verify
   affected API paths from an ordinary non-node LAN client, or report an explicit
   user-approved skip. Cluster-only probes do not establish LAN compatibility.
-- Use the root Makefile for normal operations. Use child deployment wrappers
-  only for focused render inspection, debugging, or reviewed recovery.
+- Each service owns its code and `chart/` in one root folder. Use the root
+  Makefile for deployment; component `make render` and `make validate-chart`
+  inspect the same chart locally through `scripts/service-chart.mk`. Do not
+  introduce parallel installers or standalone copies of chart resources.
 - Keep image build and registry publication separate from Kubernetes
   reconciliation.
 - Never delete PVCs, reset etcd, drop collections, or rerun ingestion merely to
   test persistence or health.
 - Treat a provider process check, dependency check, and Daedalus integration
   check as different evidence. Do not claim end-to-end health from one layer.
-- For diagnosis requests, remain read-only unless remediation is already
-  authorized. A read-only data probe may still create a cluster resource;
+- For review or diagnosis requests, remain read-only unless remediation is
+  already authorized. A read-only data probe may still create a cluster resource;
   classify both effects before running it.
 
 ## Validate and Hand Off
 
 For executable source changes, run the relevant component tests and
 `make validate-local`. For cluster-facing changes, also run
-`make validate-cluster` with the approved context. For documentation or skill
-edits alone, validate the changed links, command references, and skill metadata;
-building images or accessing the cluster is unnecessary.
+`make validate-cluster` with the approved context when cluster access is in
+scope; otherwise report that gate as pending and complete local validation.
+For documentation or skill edits alone, validate the changed links, command
+references, and skill metadata; building images or accessing the cluster is
+unnecessary.
 
 When a live operation is authorized, verify:
 
@@ -101,8 +135,9 @@ failures, and background work still awaiting acceptance.
 
 ## Keep the Skill Current
 
-Before handing off a task that changes root workflows, contracts, or recovery
-behavior, review the relevant diff and verified findings for a skill update.
+Before handing off a task that changes root workflows, contracts, review or
+validation practices, or recovery behavior, review the relevant diff and
+verified findings for a skill update.
 Also review after a reusable user correction, a demonstrated recovery gap, or
 a stale command or link. This is part of completing the task when the skill is
 writable, not a separate deployment or scheduled background process.

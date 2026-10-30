@@ -21,7 +21,7 @@ def module(path):
 
 
 recovery = module(ROOT / "scripts/workload_recovery.py")
-renderer = module(ROOT / "helm/milvus/post-render.py")
+renderer = module(ROOT / "nim-milvus-ms/chart/post-render.py")
 
 
 def workload(name, kind="Deployment", release="milvus"):
@@ -210,7 +210,7 @@ elif args[0] not in ("cluster-info", "rollout"):
 class PlacementTests(unittest.TestCase):
     def test_minio_render_changes_only_placement_and_preserves_claim_templates(self):
         rendered = subprocess.check_output(
-            ["helm", "template", "custom-milvus", "helm/milvus"], cwd=ROOT, text=True)
+            ["helm", "template", "custom-milvus", "nim-milvus-ms/chart"], cwd=ROOT, text=True)
         original = list(yaml.safe_load_all(rendered))
         updated = renderer.render(copy.deepcopy(original))
         changed = 0
@@ -227,7 +227,9 @@ class PlacementTests(unittest.TestCase):
 
     def test_stateless_spread_excludes_untolerated_failed_nodes(self):
         for chart in ("milvus", "pdf-server", "k8s-mcp-server", "unifi-network-mcp-server"):
-            output = subprocess.check_output(["helm", "template", chart, f"helm/{chart}"], cwd=ROOT, text=True)
+            output = subprocess.check_output(["helm", "template", chart, {"milvus": "nim-milvus-ms/chart", "pdf-server": "pdf-server/chart",
+                 "k8s-mcp-server": "k8s-multicluster-mcp/chart",
+                 "unifi-network-mcp-server": "unifi-network-mcp/chart"}[chart]], cwd=ROOT, text=True)
             for item in yaml.safe_load_all(output):
                 if item and item.get("kind") == "Deployment":
                     for constraint in item["spec"]["template"]["spec"].get("topologySpreadConstraints", []):

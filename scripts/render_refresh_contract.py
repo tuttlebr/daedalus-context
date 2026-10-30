@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def render() -> dict:
     rag = yaml.safe_load((ROOT / "stack/rag-schema.yaml").read_text())
     collections = yaml.safe_load((ROOT / "stack/collections.yaml").read_text())
-    values = yaml.safe_load((ROOT / "helm/url-ingest/values.yaml").read_text())
+    values = yaml.safe_load((ROOT / "url-ingest/chart/values.yaml").read_text())
     if rag["schemaVersion"] != collections["schemaVersion"]:
         raise ValueError("collection and model contract versions disagree")
     result = {

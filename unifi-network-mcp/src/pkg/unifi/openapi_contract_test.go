@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -65,19 +64,25 @@ func TestEmbeddedOpenAPIContractMatchesCanonicalArtifact(t *testing.T) {
 }
 
 func TestSuppliedNetwork10567CaptureMatchesOperationContract(t *testing.T) {
-	capturePath := filepath.Join("..", "..", "..", "UniFi-Network-API.md")
+	capturePath := filepath.Join("testdata", "network_v10.5.67_operations.json")
 	capture, err := os.ReadFile(capturePath)
 	if err != nil {
 		t.Fatalf("read UniFi Network 10.5.67 capture %s: %v", capturePath, err)
 	}
-	if !bytes.Contains(capture, []byte("# UniFi Network API (10.5.67)")) {
+	var captured struct {
+		Version    string   `json:"version"`
+		Operations []string `json:"operations"`
+	}
+	if err := json.Unmarshal(capture, &captured); err != nil {
+		t.Fatalf("decode captured operation fixture: %v", err)
+	}
+	if captured.Version != "10.5.67" {
 		t.Fatal("supplied API capture does not identify UniFi Network 10.5.67")
 	}
 
-	operationPattern := regexp.MustCompile(`(?m)^(get|post|put|patch|delete)(/v1/[^[:space:]]+)$`)
 	actual := map[string]struct{}{}
-	for _, match := range operationPattern.FindAllSubmatch(capture, -1) {
-		actual[endpointContractKey(string(match[1]), string(match[2]))] = struct{}{}
+	for _, operation := range captured.Operations {
+		actual[operation] = struct{}{}
 	}
 
 	var document openAPITestDocument
