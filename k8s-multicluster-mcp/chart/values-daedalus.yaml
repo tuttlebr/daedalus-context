@@ -4,7 +4,7 @@ agent:
   existingSecret: daedalus-backend-env
   baseUrlKey: AUTONOMOUS_LLM_MODEL_BASE_URL
   apiKeyKey: AUTONOMOUS_LLM_MODEL_API_KEY
-  model: switchyard/daedalus/local
+  model: daedalus
 networkPolicy:
   agentBackend:
     enabled: true
