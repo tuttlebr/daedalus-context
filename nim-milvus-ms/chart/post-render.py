@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add MinIO placement that the pinned upstream chart cannot express."""
+"""Adapt the pinned upstream MinIO chart for placement and its bundled client."""
 
 import sys
 
@@ -8,8 +8,20 @@ import yaml
 
 def render(documents):
     matches = 0
+    initializers = 0
     for document in documents:
-        if not document or document.get("kind") != "StatefulSet":
+        if not document:
+            continue
+        if (document.get("kind") == "ConfigMap"
+                and document.get("metadata", {}).get("labels", {}).get("app") == "minio"):
+            script = document.get("data", {}).get("initialize", "")
+            old = "${MC} policy set $POLICY myminio/$BUCKET"
+            new = "${MC} anonymous set $POLICY myminio/$BUCKET"
+            if script.count(old) + script.count(new) != 1:
+                raise ValueError("Upstream MinIO bucket initializer changed; review the post-renderer")
+            document["data"]["initialize"] = script.replace(old, new)
+            initializers += 1
+        if document.get("kind") != "StatefulSet":
             continue
         labels = document["spec"]["template"]["metadata"].get("labels", {})
         if labels.get("app") != "minio":
@@ -32,6 +44,8 @@ def render(documents):
         matches += 1
     if matches != 1:
         raise ValueError(f"Expected one MinIO StatefulSet, found {matches}")
+    if initializers != 1:
+        raise ValueError(f"Expected one MinIO bucket initializer, found {initializers}")
     return documents
 
 

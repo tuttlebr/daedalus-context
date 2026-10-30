@@ -19,8 +19,11 @@ Required existing Secrets are `milvus-root-credentials` (`password`) and
 managed. Changing a Secret alone does not rotate a password already stored in
 Milvus; coordinate the database credential and its consumers.
 
-The post-renderer supplies taint-aware MinIO topology spread that the dependency
-cannot express. Use it for every render or reconciliation. Replica placement
+The bucket initialization hook reuses the pinned MinIO server image, which
+includes the `mc` client; both image references are configured in
+[values.yaml](values.yaml). The post-renderer updates the dependency's obsolete
+`mc policy set` command to `mc anonymous set` and supplies taint-aware MinIO
+topology spread. Use it for every render or reconciliation. Replica placement
 and disruption budgets do not remove shared storage failure domains. Consult
 the [recovery guide](../../README.md#recovery) before restarting stateful
 workloads. Never reset metadata or delete claims as a health check.

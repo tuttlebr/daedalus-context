@@ -208,7 +208,7 @@ elif args[0] not in ("cluster-info", "rollout"):
 
 
 class PlacementTests(unittest.TestCase):
-    def test_minio_render_changes_only_placement_and_preserves_claim_templates(self):
+    def test_minio_render_changes_only_placement_and_bucket_policy_command(self):
         rendered = subprocess.check_output(
             ["helm", "template", "custom-milvus", "nim-milvus-ms/chart"], cwd=ROOT, text=True)
         original = list(yaml.safe_load_all(rendered))
@@ -219,11 +219,39 @@ class PlacementTests(unittest.TestCase):
                 continue
             changed += 1
             self.assertEqual(after["metadata"]["name"], "custom-milvus-minio")
-            spread = after["spec"]["template"]["spec"].pop("topologySpreadConstraints")
-            self.assertEqual(spread[0]["nodeTaintsPolicy"], "Honor")
-            self.assertEqual(spread[0]["labelSelector"]["matchLabels"]["release"], "custom-milvus")
+            if after["kind"] == "ConfigMap":
+                script = after["data"]["initialize"]
+                self.assertIn("${MC} anonymous set $POLICY myminio/$BUCKET", script)
+                self.assertNotIn("${MC} policy set", script)
+                after["data"]["initialize"] = script.replace("${MC} anonymous set", "${MC} policy set")
+            else:
+                self.assertEqual(after["kind"], "StatefulSet")
+                spread = after["spec"]["template"]["spec"].pop("topologySpreadConstraints")
+                self.assertEqual(spread[0]["nodeTaintsPolicy"], "Honor")
+                self.assertEqual(spread[0]["labelSelector"]["matchLabels"]["release"], "custom-milvus")
             self.assertEqual(after, before)
-        self.assertEqual(changed, 1)
+        self.assertEqual(changed, 2)
+
+    def test_bucket_hook_uses_mirrored_image_with_bundled_client(self):
+        rendered = subprocess.check_output(
+            ["helm", "template", "milvus", "nim-milvus-ms/chart", "--post-renderer",
+             str(ROOT / "nim-milvus-ms/chart/post-render.py")], cwd=ROOT, text=True)
+        documents = list(yaml.safe_load_all(rendered))
+        server = next(d for d in documents if d and d["kind"] == "StatefulSet"
+                      and d["metadata"]["name"] == "milvus-minio")
+        hook = next(d for d in documents if d and d["kind"] == "Job"
+                    and d["metadata"]["name"] == "milvus-minio-make-bucket-job")
+        container = hook["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual(container["image"], server["spec"]["template"]["spec"]["containers"][0]["image"])
+        self.assertTrue(container["image"].startswith("daedalus.ddns.me:5050/btuttle/minio:"))
+        self.assertIn("@sha256:", container["image"])
+        self.assertEqual(container["command"], ["/bin/sh", "/config/initialize"])
+        self.assertEqual(renderer.render(copy.deepcopy(documents)), documents)
+        initializer = next(d for d in documents if d and d["kind"] == "ConfigMap"
+                           and d["metadata"]["name"] == "milvus-minio")
+        initializer["data"]["initialize"] = "unexpected upstream script"
+        with self.assertRaisesRegex(ValueError, "initializer changed"):
+            renderer.render(documents)
 
     def test_stateless_spread_excludes_untolerated_failed_nodes(self):
         for chart in ("milvus", "pdf-server", "k8s-mcp-server", "unifi-network-mcp-server"):

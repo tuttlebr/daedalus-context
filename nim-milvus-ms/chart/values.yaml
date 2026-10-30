@@ -147,12 +147,15 @@ milvus:
   minio:
     enabled: true
     existingSecret: milvus-minio-credentials
-    image:
+    image: &minioImage
       # Mirror of the exact amd64 manifest recovered from healthy cluster nodes.
       # Upstream historical tags are unavailable; the digest preserves binary identity.
       repository: daedalus.ddns.me:5050/btuttle/minio
       tag: RELEASE.2024-12-18T13-15-44Z-amd64@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20
       pullPolicy: IfNotPresent
+    # The server image also ships /usr/bin/mc. Reuse its pinned mirror for the
+    # bucket hook; the dependency's historical minio/mc image is unavailable.
+    mcImage: *minioImage
     # Distributed MinIO members require identical server binaries. Mixed
     # amd64 and arm64 members have different checksums and cannot share a pool.
     accessKey: ""
