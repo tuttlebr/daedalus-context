@@ -1,6 +1,6 @@
 nameOverride: ""
 fullnameOverride: k8s-mcp-server
-replicaCount: 2
+replicaCount: 1
 image:
   repository: daedalus.ddns.me:5050/btuttle/k8s-mcp-server
   tag: 0.1.2

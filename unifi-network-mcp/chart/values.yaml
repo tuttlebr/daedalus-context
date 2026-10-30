@@ -1,6 +1,6 @@
 nameOverride: ""
 fullnameOverride: unifi-network-mcp-server
-replicaCount: 2
+replicaCount: 1
 image:
   repository: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server
   tag: 0.2.1
