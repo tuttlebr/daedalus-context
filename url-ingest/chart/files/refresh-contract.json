@@ -6,6 +6,10 @@
   },
   "collections": {
     "kubernetes": {
+      "exclude_url_patterns": [],
+      "fetch_overrides": {
+        "https://kubernetes.io/docs/reference/setup-tools/kubeadm/generated/kubeadm_config/kubeadm_config_print_reset-defaults": "https://raw.githubusercontent.com/kubernetes/website/main/content/en/docs/reference/setup-tools/kubeadm/generated/kubeadm_config/kubeadm_config_print_reset-defaults.md"
+      },
       "freshness_maximum_age_hours": 36,
       "http_min_interval_seconds": 0.5,
       "minimum_records": 1,
@@ -10479,6 +10483,8 @@
       ]
     },
     "mentalhealth": {
+      "exclude_url_patterns": [],
+      "fetch_overrides": {},
       "freshness_maximum_age_hours": 36,
       "http_min_interval_seconds": 0.5,
       "minimum_records": 1,
@@ -10487,6 +10493,13 @@
       "urls": []
     },
     "nvidia": {
+      "exclude_url_patterns": [
+        "^https://docs\\.nvidia\\.com/.*/_static/",
+        "^https://docs\\.nvidia\\.com/deeplearning/dali/.*/_test_[0-9a-f]+\\.html$"
+      ],
+      "fetch_overrides": {
+        "https://blogs.nvidia.com/blog/quadro-m6000-24gb/": "https://blogs.nvidia.com/wp-json/wp/v2/posts?slug=quadro-m6000-24gb"
+      },
       "freshness_maximum_age_hours": 36,
       "http_min_interval_seconds": 0.1,
       "minimum_records": 1,
@@ -10538,6 +10551,8 @@
       ]
     },
     "semianalysis": {
+      "exclude_url_patterns": [],
+      "fetch_overrides": {},
       "freshness_maximum_age_hours": 36,
       "http_min_interval_seconds": 5,
       "minimum_records": 1,
@@ -10553,6 +10568,8 @@
       ]
     },
     "vetpartner": {
+      "exclude_url_patterns": [],
+      "fetch_overrides": {},
       "freshness_maximum_age_hours": 36,
       "http_min_interval_seconds": 0.5,
       "minimum_records": 1,

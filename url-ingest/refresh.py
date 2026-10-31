@@ -12,6 +12,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -19,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from refresh_fetch import SourceRemoved, discover, fetch, session
-from refresh_milvus import Store, group_results
+from refresh_milvus import Store, StoreUnavailable, group_results
 from refresh_state import (RunReport, State, CollectionBusy, atomic_json, collection_lock,
                            contract_fingerprint, digest, heartbeat, capacity_slot)
 from refresh_http import HostGovernor
@@ -44,7 +45,8 @@ def download_source(item, previous: dict, cache: Path, governor: HostGovernor, j
             return source, cached, {**previous, '_reused_check': True}, None
         with session(governor) as http:
             path, document = fetch(http, source, previous, cache,
-                                   try_markdown=entry.get('try_markdown', False))
+                                   try_markdown=entry.get('try_markdown', False),
+                                   url_override=entry.get('fetch_url'))
         document.pop('last_error', None)
         return source, path, {**document, 'last_checked_job': job_id}, None
     except Exception as error:
@@ -140,6 +142,8 @@ def process_batch(batch: list[tuple[str, Path, dict]], contract: dict, kind: str
         except Exception as error:
             state.record(source, {**document, 'last_error': type(error).__name__})
             report.fail(source, error)
+            if isinstance(error, StoreUnavailable):
+                raise RefreshFailed(str(error)) from error
 
 
 def run(contract: dict, alias: str, state_root: Path, cache: Path,
@@ -202,6 +206,16 @@ def run(contract: dict, alias: str, state_root: Path, cache: Path,
             for source, document in state.data["documents"].items():
                 if source.startswith(("http://", "https://")) and not document.get("deleted"):
                     sources.setdefault(source, {"url": source, "kind": "url"})
+            # Exclusions are reviewed source policy, not evidence of deletion.
+            # Apply to known sources too, retaining their state and old vectors.
+            excluded = [source for source in sources if any(re.search(pattern, source)
+                        for pattern in collection.get('exclude_url_patterns', []))]
+            for source in excluded:
+                del sources[source]
+            report.data['excluded_urls'] = len(excluded)
+            for source, target in collection.get('fetch_overrides', {}).items():
+                if source in sources:
+                    sources[source] = {**sources[source], 'fetch_url': target}
             report.data["discovered_urls"] = len(sources)
             report.write()
 

@@ -204,6 +204,40 @@ class GovernorTests(unittest.TestCase):
             recovered.get(client, 'https://example.com/c')
             self.assertEqual(clock.waits, [300, 10])
 
+    def test_sustained_success_recovers_configured_pace_and_persists_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clock, client = Clock(), Mock()
+            root = Path(tmp)
+            client.get.return_value = response(429, {'Retry-After': '3600'})
+            HostGovernor(root, 0.1, clock=clock.time, sleep=clock.sleep).get(client, 'https://example.com/a')
+            client.get.return_value = response(304)
+            governor = HostGovernor(root, 0.1, clock=clock.time, sleep=clock.sleep)
+            for _ in range(400):
+                governor.get(client, 'https://example.com/a')
+            self.assertEqual(clock.waits[0], 3600)
+            self.assertEqual(json.loads(next(root.glob('*.json')).read_text())['minimum_interval'], 0.1)
+            restarted = HostGovernor(root, 0.1, clock=clock.time, sleep=clock.sleep)
+            restarted.get(client, 'https://example.com/a')
+            restarted.get(client, 'https://example.com/b')
+            self.assertAlmostEqual(clock.waits[-1], 0.1)
+
+    def test_another_throttle_resets_recovery_success_streak(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clock, client = Clock(), Mock()
+            governor = HostGovernor(Path(tmp), 0.1, clock=clock.time, sleep=clock.sleep)
+            client.get.return_value = response(429)
+            governor.get(client, 'https://example.com/a')
+            client.get.return_value = response(200)
+            for _ in range(99):
+                governor.get(client, 'https://example.com/a')
+            client.get.return_value = response(429)
+            governor.get(client, 'https://example.com/a')
+            client.get.return_value = response(200)
+            governor.get(client, 'https://example.com/a')
+            state = json.loads(next(Path(tmp).glob('*.json')).read_text())
+            self.assertEqual(state['minimum_interval'], 2)
+            self.assertEqual(state['successful_responses'], 0)  # Only checkpoints are durable.
+
     def test_repeated_forbidden_responses_open_host_circuit(self):
         with tempfile.TemporaryDirectory() as tmp:
             clock, client = Clock(), Mock()

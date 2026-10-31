@@ -42,6 +42,8 @@ def render() -> dict:
             "freshness_maximum_age_hours": item["freshnessMaximumAgeHours"],
             "minimum_records": item["minimumRecords"],
             "http_min_interval_seconds": settings.get("httpMinIntervalSeconds", 0.5),
+            "exclude_url_patterns": settings.get("excludeUrlPatterns", []),
+            "fetch_overrides": settings.get("fetchOverrides", {}),
         }
     return result
 

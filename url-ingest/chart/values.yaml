@@ -3,7 +3,7 @@ fullnameOverride: url-ingest
 
 images:
   crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
-  runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.1
+  runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.5
   pullPolicy: IfNotPresent
 imagePullSecrets:
   - name: nvcr-imagepullsecret
@@ -69,6 +69,15 @@ urlLists:
 collections:
   nvidia:
     httpMinIntervalSeconds: 0.1
+    # Sphinx build/test assets are not source documents. Existing vectors are
+    # retained if a source is excluded; exclusion never authorizes deletion.
+    excludeUrlPatterns:
+      - '^https://docs\.nvidia\.com/.*/_static/'
+      - '^https://docs\.nvidia\.com/deeplearning/dali/.*/_test_[0-9a-f]+\.html$'
+    # This permalink redirects to a retired host. Its public WordPress record
+    # still contains the original article, with the same permalink/provenance.
+    fetchOverrides:
+      https://blogs.nvidia.com/blog/quadro-m6000-24gb/: https://blogs.nvidia.com/wp-json/wp/v2/posts?slug=quadro-m6000-24gb
     schedule: "0 2 * * *"
     includePdfs: true
     fileChunkSize: 32
@@ -94,6 +103,10 @@ collections:
         maxAgeDays: 365
   kubernetes:
     httpMinIntervalSeconds: 0.5
+    # The public page returns 403; fetch its maintained upstream Markdown while
+    # keeping the original source identity in state and retrieval results.
+    fetchOverrides:
+      https://kubernetes.io/docs/reference/setup-tools/kubeadm/generated/kubeadm_config/kubeadm_config_print_reset-defaults: https://raw.githubusercontent.com/kubernetes/website/main/content/en/docs/reference/setup-tools/kubeadm/generated/kubeadm_config/kubeadm_config_print_reset-defaults.md
     schedule: "0 3 * * *"
     includePdfs: true
     fileChunkSize: 64

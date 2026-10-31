@@ -49,6 +49,8 @@ the active generation from the deployed configuration. Within that root:
 Read the raw JSON during diagnosis. Constructing
 [refresh_state.State](../../../../url-ingest/refresh_state.py) can replay,
 checkpoint, and truncate the journal; it is not a read-only inspection helper.
+Stream large failure journals and summarize counts and bounded samples. Loading
+an entire journal into the small monitor container can exhaust its memory.
 
 The monitor's `/status` summarizes collections; detailed source errors are in
 the run failure journals. Correlate journal errors with worker/dependency logs
@@ -61,9 +63,11 @@ failures and report unresolved causes explicitly.
 | --- | --- |
 | Lock contention or `skipped_active` | Check the owning worker and heartbeat. CronJob `Forbid` does not cover manually created Jobs. A skip must preserve the owner's report and must not advance freshness. Do not unlink a lock file or kill a progressing backfill merely to start another job. |
 | Repeated 403, 429, or 503; `waiting_http` | Inspect durable host cooldown and `Retry-After`. Let bounded pacing/backoff operate; manual restarts must not bypass it. A healthy heartbeat during cooldown differs from a dead worker. |
+| Repeated work-budget exhaustion | Compare source count times the effective host interval with the work budget. Distinguish an active cooldown from a historical rate penalty; verify sustained successful requests recover toward the configured pace in [refresh_http.py](../../../../url-ingest/refresh_http.py). Do not clear live cooldown state. |
+| Persistent closed-channel storage failures | Inspect the actual runner's client-library version and dependency recovery behavior. A ready Milvus service does not repair a stale client handler. Validate the client fix and bounded replacement retries; persistent dependency failures should stop the pass while retaining committed progress. |
 | 404/410 or `pending_removals` | Preserve previous vectors through the configured repeated-observation grace period. Sitemap omission and an unavailable PDF directory are insufficient evidence for deleting documents. |
 | Partial pass, limit, or work budget exhausted | Confirm committed progress remains resumable. These states do not advance full-scan freshness; a large initial backfill may need multiple passes. |
-| Extraction timeout or empty result | Examine the specific source, extraction result, dependency logs, and configured request timeout before changing it. Large PDFs may need longer than HTML. Keep retries bounded; empty text is not a successful replacement. |
+| Extraction timeout or empty result | Inspect downloaded bytes for HTML redirects, client-rendered components, or non-document build assets, then examine extraction and dependency logs. See the reviewed source policies in [URL ingestion](../../../../url-ingest/README.md#source-replacement-and-removal). Large PDFs may need longer than HTML. Keep retries bounded; empty text is not a successful replacement. |
 | Retry pod after a source failure | Successful checks are reusable within the same Job; a new scheduled Job must revalidate. Preserve Job identity, manifests, and cached bytes when verifying retry behavior. |
 
 ## Recover and Verify Within Scope

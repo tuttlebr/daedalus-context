@@ -35,4 +35,4 @@ services:
     build:
       context: ./url-ingest
       dockerfile: Dockerfile.runner
-    image: ${URL_INGEST_RUNNER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.1}
+    image: ${URL_INGEST_RUNNER_COMPOSE_IMAGE:-daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.5}

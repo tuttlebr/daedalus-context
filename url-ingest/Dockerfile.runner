@@ -1,5 +1,9 @@
 FROM nvcr.io/nvidia/nemo-microservices/nv-ingest:26.3.0
 
+# 2.6.10 keeps a closed handler after ConnectionManager recovery (upstream
+# pymilvus#3345). Pin the patch that reconnects that handler in place.
+RUN /opt/nv_ingest_runtime/bin/python3 -m pip install --no-cache-dir --no-deps pymilvus==2.6.11
+
 COPY --chmod=0555 nv-ingest-ms-tasks.py /opt/daedalus/nv-ingest-ms-tasks.py
 COPY --chmod=0555 refresh*.py /opt/daedalus/
 

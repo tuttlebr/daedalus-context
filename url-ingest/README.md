@@ -93,6 +93,19 @@ even when omitted from a sitemap. Repeated 404/410 observations must satisfy the
 deletion grace period before vectors are removed. An unavailable PDF directory
 is an error. Pending removals preserve vectors and do not advance freshness.
 
+Downloads follow bounded HTML redirects with delays up to five seconds, as
+well as HTTP redirects.
+Known NVIDIA learning-path and download components are materialized from their
+public JSON, lesson files, and embedded installation instructions before
+extraction; missing component content remains a failure. These components are
+revalidated even when the surrounding HTML has not changed.
+
+Collection `fetchOverrides` in the chart values can select a reviewed alternate
+source while preserving the original URL in state and retrieval results.
+`excludeUrlPatterns` omits non-document build/test assets from both discovery
+and known-source checks. Reports count these as `excluded_urls`; exclusions
+retain any existing vectors and never authorize deletion.
+
 ## Concurrency, retries, and freshness
 
 A shared filesystem lock allows one writer per collection, including manually
@@ -103,7 +116,9 @@ and manual Jobs inherit it. Do not remove lock files to bypass an active worker.
 
 Host requests are paced. Repeated blocking, throttling, and service-unavailable
 responses activate durable cooldowns that honor `Retry-After` and survive pod
-retries. Extraction and transport waits are bounded. The worker checkpoints
+retries. After sustained successful responses, the throttle penalty gradually
+returns to the configured interval; active cooldowns are always honored.
+Extraction and transport waits are bounded. The worker checkpoints
 partial progress before its work budget expires, leaving room before the
 Kubernetes deadline. Large backfills can require multiple passes.
 
@@ -111,6 +126,10 @@ Successful source checks can be reused within retries of the same Job. A new
 scheduled Job revalidates sources. Failed sources and expired removal grace
 periods receive priority. Partial passes, bounded smoke tests, unresolved
 failures, and pending removals do not establish full-scan freshness.
+
+Transient Milvus failures retry the deterministic replacement with bounded
+backoff. A persistent storage outage stops the pass for a Kubernetes retry,
+preserving committed progress instead of failing every remaining source.
 
 ## Diagnostics
 

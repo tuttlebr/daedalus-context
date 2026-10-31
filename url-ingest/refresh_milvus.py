@@ -3,9 +3,31 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections import defaultdict
 
 from refresh_state import digest
+
+
+class StoreUnavailable(RuntimeError):
+    """A persistent dependency failure must stop the pass, not poison every source."""
+
+
+def storage_retry(operation):
+    for attempt in range(3):
+        try:
+            return operation()
+        except Exception as error:
+            message = str(error).lower()
+            transient = isinstance(error, TimeoutError) or any(part in message for part in (
+                "closed channel", "channel closed", "channel not available",
+                "channel distribution is not serviceable", "unavailable",
+                "deadline exceeded", "fail connecting to server"))
+            if not transient:
+                raise
+            if attempt == 2:
+                raise StoreUnavailable(f"Milvus unavailable after 3 attempts: {error}") from error
+            time.sleep(5 * (attempt + 1))
 
 
 def prepare_rows(source: str, content_hash: str, fingerprint: str, records: list[dict], dimension: int) -> list[dict]:
@@ -64,6 +86,11 @@ class Store:
 
     def replace(self, source: str, content_hash: str, records: list[dict]) -> int:
         rows = prepare_rows(source, content_hash, self.fingerprint, records, self.dimension)
+        # Replay the entire deterministic replacement if a query node moves or
+        # the client reconnects. Old rows survive until verification succeeds.
+        return storage_retry(lambda: self._replace(source, content_hash, rows))
+
+    def _replace(self, source: str, content_hash: str, rows: list[dict]) -> int:
         source_key = digest(source)
         clause = f'source_key == "{source_key}" and content_hash == "{content_hash}"'
         for start in range(0, len(rows), 128):
@@ -93,7 +120,7 @@ class Store:
         return len(rows)
 
     def delete(self, source: str) -> None:
-        self.client.delete(self.name, filter=f'source_key == "{digest(source)}"', timeout=60)
+        storage_retry(lambda: self.client.delete(self.name, filter=f'source_key == "{digest(source)}"', timeout=60))
 
 
 def group_results(records: list, source_paths: dict[str, str]) -> dict[str, list]:

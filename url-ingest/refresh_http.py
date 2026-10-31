@@ -58,6 +58,7 @@ class HostGovernor:
             interval = max(self.interval, state.get('minimum_interval', 0))
             state['not_before'] = now + interval
             if response.status_code in (403, 429, 503):
+                state['successful_responses'] = 0
                 state['blocked_responses'] = state.get('blocked_responses', 0) + 1
                 # Isolated permission failures need not stop a whole domain.
                 # Repeated denials and explicit throttling open the circuit.
@@ -70,6 +71,17 @@ class HostGovernor:
             elif state.get('blocked_responses'):
                 state['blocked_responses'] = 0
                 atomic_json(path, state)
+            # A past throttle must not permanently make a full scan impossible.
+            # Honor every cooldown first, then reduce the penalty only after a
+            # sustained run of successful responses. Never exceed configured pace.
+            if response.status_code in (200, 304) and state.get('minimum_interval', 0) > self.interval:
+                state['successful_responses'] = state.get('successful_responses', 0) + 1
+                if state['successful_responses'] >= 100:
+                    state['minimum_interval'] = max(self.interval, state['minimum_interval'] / 2)
+                    state['successful_responses'] = 0
+                    atomic_json(path, state)
+            elif response.status_code not in (200, 304):
+                state['successful_responses'] = 0
             return response
 
 

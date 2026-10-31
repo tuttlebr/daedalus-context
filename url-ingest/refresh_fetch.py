@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import gzip
+import re
 import time
+from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urldefrag, urlparse
+from urllib.parse import urldefrag, urlparse, urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -17,6 +19,46 @@ from refresh_state import digest
 
 class SourceRemoved(Exception):
     pass
+
+
+class RedirectParser(HTMLParser):
+    """Read declarative HTML redirects without executing page scripts."""
+    target = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "meta" and (attrs.get("http-equiv") or "").lower() == "refresh":
+            match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*;\s*url\s*=\s*(.+?)\s*",
+                                 attrs.get("content") or "", re.IGNORECASE)
+            if match and float(match[1]) <= 5:
+                self.target = match[2].strip("\"'")
+
+
+def get_document(client, url, headers=None):
+    """Follow bounded HTTP/meta redirects, applying validators only to their URL."""
+    seen = set()
+    for _ in range(6):
+        url = normalize_url(url)
+        if url in seen:
+            raise ValueError("HTML redirect loop")
+        seen.add(url)
+        response = client.get(url, headers=headers or {}, timeout=(10, 60))
+        if response.status_code != 200:
+            return response, url
+        body = response.content
+        if len(body) > 64 * 1024 * 1024:
+            raise ValueError("source exceeds the 64 MiB download limit")
+        parser = RedirectParser()
+        if b"<meta" in body.lower():
+            parser.feed(body.decode("utf-8", errors="replace"))
+        if not parser.target:
+            return response, url
+        # Requests already follows HTTP redirects; relative meta targets are
+        # relative to the final response URL, never the original source URL.
+        base = response.url if isinstance(response.url, str) else url
+        url = urljoin(base, parser.target)
+        headers = {}
+    raise ValueError("too many HTML redirects")
 
 
 def session(governor=None) -> requests.Session:
@@ -87,7 +129,7 @@ def discover(client: requests.Session, entries: list[dict]) -> tuple[dict[str, d
 
 
 def fetch(client: requests.Session, url: str, previous: dict, cache: Path,
-          *, try_markdown: bool = False) -> tuple[Path, dict]:
+          *, try_markdown: bool = False, url_override: str | None = None) -> tuple[Path, dict]:
     cached = Path(previous["cache_path"]) if previous.get("cache_path") else None
     headers = {}
     if cached and cached.is_file():
@@ -95,13 +137,16 @@ def fetch(client: requests.Session, url: str, previous: dict, cache: Path,
             headers["If-None-Match"] = previous["etag"]
         if previous.get("last_modified"):
             headers["If-Modified-Since"] = previous["last_modified"]
-    effective_url = previous.get("fetch_url", url)
-    if try_markdown and not previous.get("fetch_url") and url.endswith(".html"):
+    effective_url = url_override or previous.get("fetch_url", url)
+    if (effective_url != previous.get("fetch_url", url) or previous.get("last_error")
+            or previous.get("materialized")):
+        headers = {}
+    if try_markdown and not url_override and not previous.get("fetch_url") and url.endswith(".html"):
         effective_url = url[:-5] + ".md"
-    response = client.get(effective_url, headers=headers, timeout=(10, 60))
-    if effective_url != url and response.status_code in {404, 410, 403}:
+    response, fetched_url = get_document(client, effective_url, headers)
+    if not url_override and effective_url != url and response.status_code in {404, 410, 403}:
         effective_url = url
-        response = client.get(url, timeout=(10, 60))
+        response, fetched_url = get_document(client, url)
     if response.status_code == 304:
         if not cached or not cached.is_file():
             raise ValueError("304 received without cached source")
@@ -114,8 +159,12 @@ def fetch(client: requests.Session, url: str, previous: dict, cache: Path,
         raise ValueError("source returned an empty body")
     if len(body) > 64 * 1024 * 1024:
         raise ValueError("source exceeds the 64 MiB download limit")
+    from refresh_html import materialize
+    rendered = materialize(client, fetched_url, body)
+    if rendered is not None:
+        body = rendered
     content_hash = digest(body)
-    extension = ".pdf" if body.startswith(b"%PDF-") else ".md" if effective_url.endswith(".md") else ".html"
+    extension = ".pdf" if body.startswith(b"%PDF-") else ".md" if urlparse(fetched_url).path.endswith(".md") else ".html"
     # Preserve immutable bytes while extraction is in flight. A changed source
     # cannot accidentally be marked complete for an earlier download.
     path = cache / digest(url) / (content_hash + extension)
@@ -131,4 +180,5 @@ def fetch(client: requests.Session, url: str, previous: dict, cache: Path,
     return path, {**previous, "cache_path": str(path), "sha256": content_hash,
                   "etag": response.headers.get("ETag", ""),
                   "last_modified": response.headers.get("Last-Modified", ""),
-                  "fetch_url": effective_url, "last_checked": time.time(), "missing_since": 0}
+                  "materialized": rendered is not None,
+                  "fetch_url": fetched_url, "last_checked": time.time(), "missing_since": 0}
