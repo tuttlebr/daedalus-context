@@ -3,6 +3,16 @@
   "type": "object",
   "required": ["replicaCount", "image", "auth", "service"],
   "properties": {
+    "agent": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "^(?:[^/\\s]+/\\S+)?$",
+          "description": "OpenCode provider/model ID, or empty to use the existing Secret's model key."
+        }
+      }
+    },
     "server": {
       "type": "object",
       "required": ["readOnly", "noHelm", "enableExec", "enableKubectl", "enableAgentWrite"],

@@ -3,7 +3,7 @@
 A Model Context Protocol server for the local UniFi Network integration API.
 It authenticates to the controller with `X-API-KEY`. Tool operations and typed
 request schemas follow the checksum-pinned
-[OpenAPI contract](network_v10.4.57_openapi.json), embedded by
+[OpenAPI contract](src/pkg/unifi/network_v10.4.57_openapi.json), embedded by
 [src/pkg/unifi/contract.go](src/pkg/unifi/contract.go).
 
 By default the server starts without a UniFi device URL, API key, or device credentials. MCP clients can provide `baseUrl` and `apiKey` on each tool call, or private deployments can configure server-side defaults with environment variables.

@@ -4,7 +4,8 @@ agent:
   existingSecret: daedalus-backend-env
   baseUrlKey: AUTONOMOUS_LLM_MODEL_BASE_URL
   apiKeyKey: AUTONOMOUS_LLM_MODEL_API_KEY
-  model: daedalus
+  # OpenCode provider/model; the backend receives the model ID "daedalus".
+  model: switchyard/daedalus
 networkPolicy:
   agentBackend:
     enabled: true

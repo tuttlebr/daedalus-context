@@ -77,11 +77,13 @@ class KubernetesMCPAccessTests(unittest.TestCase):
 
     def test_daedalus_agent_reuses_credentials_and_preserves_existing_ingress(self) -> None:
         defaults = render()
-        resources = render(values=CHART / "values-daedalus.yaml")
+        values_file = CHART / "values-daedalus.yaml"
+        configured = yaml.safe_load(values_file.read_text())
+        resources = render(values=values_file)
         deployment = next(x for x in resources if x["kind"] == "Deployment")
         env = {x["name"]: x for x in
                deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
-        self.assertEqual(env["OPENCODE_MODEL"]["value"], "switchyard/daedalus/local")
+        self.assertEqual(env["OPENCODE_MODEL"]["value"], configured["agent"]["model"])
         pod_spec = deployment["spec"]["template"]["spec"]
         self.assertIn({"name": "opencode-state", "mountPath": "/home/appuser/.local/state"},
                       pod_spec["containers"][0]["volumeMounts"])
@@ -111,6 +113,31 @@ class KubernetesMCPAccessTests(unittest.TestCase):
     def test_agent_backend_rejects_an_empty_selector(self) -> None:
         with self.assertRaises(subprocess.CalledProcessError):
             render("networkPolicy.agentBackend.enabled=true")
+
+    def test_agent_model_overrides_preserve_provider_and_backend_model(self) -> None:
+        for model in ("switchyard/daedalus", "custom-provider/organization/model"):
+            with self.subTest(model=model):
+                resources = render(f"agent.model={model}", values=CHART / "values-daedalus.yaml")
+                deployment = next(x for x in resources if x["kind"] == "Deployment")
+                env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+                model_env = next(x for x in env if x["name"] == "OPENCODE_MODEL")
+                self.assertEqual(model_env, {"name": "OPENCODE_MODEL", "value": model})
+
+    def test_agent_model_rejects_incomplete_opencode_identifiers(self) -> None:
+        for model in ("daedalus", "/daedalus", "switchyard/", "switchyard/model name"):
+            with self.subTest(model=model), self.assertRaises(subprocess.CalledProcessError) as error:
+                render(f"agent.model={model}")
+            self.assertIn("agent.model", error.exception.stderr)
+
+    def test_empty_agent_model_keeps_the_existing_secret_reference(self) -> None:
+        resources = render()
+        deployment = next(x for x in resources if x["kind"] == "Deployment")
+        env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        model_env = next(x for x in env if x["name"] == "OPENCODE_MODEL")
+        self.assertEqual(model_env["valueFrom"]["secretKeyRef"], {
+            "name": "k8s-mcp-agent-config", "key": "model", "optional": True,
+        })
+        self.assertNotIn("value", model_env)
 
 
 if __name__ == "__main__":

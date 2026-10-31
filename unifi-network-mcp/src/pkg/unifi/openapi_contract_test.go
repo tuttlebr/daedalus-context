@@ -177,7 +177,7 @@ func TestEndpointsMatchCompleteOpenAPIContract(t *testing.T) {
 
 func readCanonicalOpenAPIContract(t *testing.T) []byte {
 	t.Helper()
-	contractPath := filepath.Join("..", "..", "..", "network_v10.4.57_openapi.json")
+	contractPath := "network_v10.4.57_openapi.json"
 	data, err := os.ReadFile(contractPath)
 	if err != nil {
 		t.Fatalf("read OpenAPI contract %s: %v", contractPath, err)

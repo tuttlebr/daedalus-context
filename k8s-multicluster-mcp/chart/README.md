@@ -26,7 +26,12 @@ the write role/binding and disable all write tools.
 For Daedalus's existing Switchyard autonomous model, persist
 `K8S_MCP_VALUES_FILE=k8s-multicluster-mcp/chart/values-daedalus.yaml`. The
 [override](values-daedalus.yaml) references the existing backend Secret's model
-URL/API-key fields and selects `switchyard/daedalus/local` (provider/model).
+URL/API-key fields. Set `agent.model` in that file to an OpenCode
+`provider/model` identifier: `switchyard/daedalus` selects the backend model
+`daedalus`. The provider prefix names the OpenCode provider; it is not part of
+the model ID sent to the backend. The chart rejects bare model names; an empty
+override uses the existing Secret's model key, which must also contain a
+`provider/model` identifier.
 It adds ingress and egress between this MCP server and Switchyard on port 4000.
 Existing client access rules remain in place. Keep this model selection aligned
 with the autonomous model configured by the Daedalus owner.
