@@ -129,10 +129,11 @@ The base chart uses ClusterIP. The root production overlay and
 | `nemotron-retriever-reranker` | `30086` | `8000` |
 
 Clients use a node's LAN address with the appropriate NodePort and API path.
-`externalTrafficPolicy: Cluster` allows forwarding to a backend on another
-node. Supplemental Cilium policy permits host/remote-node forwarding to the API
-port. Per-endpoint CIDRs allow direct LAN traffic and namespace rules allow
-in-cluster consumers.
+Use the node hosting the model for LAN requests. Although
+`externalTrafficPolicy: Cluster` enables forwarding, the supplemental Cilium
+policy permits only host/remote-node identities on that path. Cross-node LAN
+traffic retaining the `world` identity is denied. Per-endpoint CIDRs allow
+direct LAN traffic and namespace rules allow in-cluster consumers.
 
 Cross-node source NAT can replace the original client identity with the node
 identity. These plain NodePort CIDRs therefore do not enforce an original-client

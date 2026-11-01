@@ -78,10 +78,16 @@ metadata:
   labels:
     app.kubernetes.io/name: nv-ingest-parser
 spec:
-  type: ClusterIP
+  type: {{ .Values.localParser.service.type }}
+  {{- if eq .Values.localParser.service.type "NodePort" }}
+  externalTrafficPolicy: {{ .Values.localParser.service.externalTrafficPolicy }}
+  {{- end }}
   selector:
     app.kubernetes.io/name: nv-ingest-parser
   ports:
     - name: http
       port: 8000
       targetPort: http
+      {{- if eq .Values.localParser.service.type "NodePort" }}
+      nodePort: {{ .Values.localParser.service.nodePort }}
+      {{- end }}

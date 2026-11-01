@@ -11,6 +11,11 @@ passes the local parser endpoint and uses the required
 [post-renderer](../helm-post-renderer.sh). A bare Helm install omits
 those environment-specific inputs.
 
+`localParser.service` reserves NodePort `30089` for LAN clients. Call
+`http://<node-lan-ip>:30089/v1/parse` with a base64 page image in `image`.
+The existing internal endpoint `http://nv-ingest-parser:8000` remains available.
+`externalTrafficPolicy: Cluster` permits forwarding through any node.
+
 Required existing Secrets:
 
 - `ngc-secret`: container registry authentication;

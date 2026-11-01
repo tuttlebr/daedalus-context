@@ -49,5 +49,9 @@ actual new image. Do not remove these mounts without replacing the extraction
 policy; that would restore upstream native-text and remote-model behavior.
 
 The parser's `/v1/parse` endpoint accepts a base64 page image in `image` and
-returns `markdown`, normalized `blocks`, warnings, and model revision. It is an
-internal ClusterIP service. No document bytes or extracted content are logged.
+returns `markdown`, normalized `blocks`, warnings, and model revision. LAN
+clients use `http://<node-lan-ip>:30089/v1/parse`; in-cluster clients retain
+`http://nv-ingest-parser:8000/v1/parse`. The chart's `localParser.service`
+settings reserve the NodePort and use `externalTrafficPolicy: Cluster` so
+every node can forward to the parser. No document bytes or extracted content
+are logged.

@@ -16,3 +16,6 @@ from the active context in the same operation.
 Preserve unrelated working-tree changes. Do not run registry writes, cluster
 writes, data jobs, PVC deletion, etcd resets, or collection rebuilds unless the
 user explicitly requests the corresponding action.
+
+For API verification from a non-Kubernetes LAN client, always try SSH to
+`daedalus-07` first.

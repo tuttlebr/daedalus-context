@@ -1,4 +1,4 @@
-# Fixed NodePorts reachable through any node's LAN address.
+# Fixed NodePorts for LAN clients; see README.md for model-host node selection.
 networkPolicy:
   ciliumNodePort:
     enabled: true

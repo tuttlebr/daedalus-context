@@ -291,6 +291,32 @@ operation with recorded accepted risks. `make validate-ha` intentionally
 rejects that policy. Shared production HA requires approved numeric node-loss,
 failover, RPO, and RTO criteria.
 
+### Model APIs on the LAN
+
+Services outside Kubernetes can call the models through a node's LAN address:
+
+| Model service | Fixed NodePort | Request URL |
+| --- | --- | --- |
+| Embedding | `30085` | `http://<node-lan-ip>:30085/v1/embeddings` |
+| Reranking | `30086` | `http://<node-lan-ip>:30086/rerank` |
+| Parsing | `30089` | `http://<node-lan-ip>:30089/v1/parse` |
+
+For example, use `192.168.1.236` (`daedalus-03`) for all three APIs while the
+retriever models run there. NIM-compatible
+reranking clients use `/v1/ranking` on the same reranking port. The parsing
+endpoint accepts a base64 page image in `image` and returns `markdown` and
+structured blocks; see the [parser API](nv-ingest/local-parser/README.md).
+The existing internal DNS names and port `8000` remain available to cluster
+consumers. The parser accepts forwarding through nodes that do not host it.
+For embedding and reranking, use the node hosting the model: the existing
+Cilium policy blocks cross-node LAN forwarding when traffic retains the
+`world` identity. Check model placement with guarded
+`kubectl -n daedalus get pods -l app.kubernetes.io/name=nemotron-retriever -o wide`.
+
+The [retriever production values](nemotron-retriever/chart/values-daedalus.yaml)
+and [parser chart values](nv-ingest/chart/values.yaml) persist these assignments
+for subsequent root `make deploy` and `make update` runs.
+
 ### External MCP Network Prerequisite
 
 When external MCP access is enabled, the fixed NodePorts use

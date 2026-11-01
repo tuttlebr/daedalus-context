@@ -104,6 +104,10 @@ podDisruptionBudget:
 
 localParser:
   image: daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
+  service:
+    type: NodePort
+    nodePort: 30089
+    externalTrafficPolicy: Cluster
   nodeSelector:
     kubernetes.io/hostname: daedalus-04
   resources:
