@@ -81,10 +81,20 @@ milvus:
       limits: {cpu: "1", memory: 2Gi}
   queryNode:
     replicas: 3
+    # Segment loading needs the workers with at least 128 GiB of physical RAM.
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values: [daedalus-03, daedalus-04, daedalus-06]
     topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: DoNotSchedule
+        nodeAffinityPolicy: Honor
         nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
@@ -92,8 +102,8 @@ milvus:
             component: querynode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 250m, memory: 32Gi}
-      limits: {cpu: "4", memory: 64Gi}
+      requests: {cpu: 250m, memory: 64Gi}
+      limits: {cpu: "4", memory: 96Gi}
   dataNode:
     replicas: 3
     topologySpreadConstraints:
