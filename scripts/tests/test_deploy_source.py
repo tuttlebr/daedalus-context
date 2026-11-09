@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,23 @@ class SourceDeployTests(unittest.TestCase):
             self.assertEqual(events, [])
 
     def test_plain_make_loads_env_preserves_cli_choices_and_delivers_fresh_refs_to_helm(self):
+        self.assert_plain_make_deploy()
+
+    def test_plain_make_fixture_isolates_callers_context_and_make_overrides(self):
+        # validate-cluster legitimately runs this suite after loading .env and
+        # from Make with command-line deployment choices exported to children.
+        with mock.patch.dict(os.environ, {
+            "EXPECTED_CONTEXT": "production-context",
+            "MAKEFLAGS": " -- EXPECTED_CONTEXT=production-context COMPONENTS=retriever",
+            "MFLAGS": "-r",
+            "MAKEOVERRIDES": "EXPECTED_CONTEXT=production-context COMPONENTS=retriever",
+            "MAKELEVEL": "2",
+            "GNUMAKEFLAGS": "--warn-undefined-variables",
+            "MAKEFILES": "/unused/production-makefile",
+        }):
+            self.assert_plain_make_deploy()
+
+    def assert_plain_make_deploy(self):
         # Run the actual root Makefile, source builder and dependency orchestrator
         # in a disposable checkout. Only read-only gates and external clients are
         # replaced, leaving recursive Make precedence and Helm recipes intact.
@@ -145,6 +163,14 @@ class SourceDeployTests(unittest.TestCase):
                 content += '\nif args == ["config", "current-context"]:\n    print("approved-fixture")\n'
             client.write_text(content)
             client.chmod(0o755)
+        fixture_environment = os.environ.copy()
+        # This is a new disposable Make invocation, not a recursive deployment
+        # of the caller's checkout. Only its own CLI choices may propagate.
+        for name in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL",
+                     "GNUMAKEFLAGS", "MAKEFILES"):
+            fixture_environment.pop(name, None)
+        fixture_environment.update(EXPECTED_CONTEXT="approved-fixture",
+                                   TEST_CALLS=str(self.log))
         result = subprocess.run(
             ["make", "--no-print-directory", "deploy", "COMPONENTS=k8s-mcp",
              "K8S_MCP_IMAGE=localhost:5050/from-cli:v1.2.3-rc.1",
@@ -152,7 +178,7 @@ class SourceDeployTests(unittest.TestCase):
              f"SHELL={shutil.which('bash')}", f"COMPOSE={binaries / 'compose'}",
              f"HELM={binaries / 'helm'}", f"KUBECTL={binaries / 'kubectl'}",
              f"TEST_GATE={binaries / 'gate'}"],
-            cwd=checkout, env={**os.environ, "TEST_CALLS": str(self.log)},
+            cwd=checkout, env=fixture_environment,
             text=True, capture_output=True, timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
