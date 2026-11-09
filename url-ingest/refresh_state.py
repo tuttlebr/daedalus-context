@@ -181,3 +181,16 @@ def capacity_slot(root: Path, capacity: int):
                     fcntl.flock(handle, fcntl.LOCK_UN)
                 return
             time.sleep(5)
+
+
+def refresh_owned(name: str, description: str | None, contract_collections) -> bool:
+    """Whether promotion may archive a `default` collection.
+
+    Only collections produced by this refresh system are moved: a prior
+    generation of a contract collection or anything carrying a refresh
+    fingerprint. The Agent shares the same database for `meta` and private
+    `user_uploads*` collections; those are never refresh-owned.
+    """
+    if name in set(contract_collections):
+        return True
+    return bool(description) and description.startswith("daedalus-refresh:")

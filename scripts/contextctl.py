@@ -259,6 +259,9 @@ def agent_env(environment_name: str) -> str:
         f"{environment_name}.yaml; do not edit.",
         f"EMBEDDING_BASE_URL={url('retriever', 'embeddings', '/v1')}",
         f"EMBEDDING_MODEL={rag['embedding']['model']}",
+        # The Agent records this ID in upload collection metadata; it must
+        # name the same served embedding space as EMBEDDING_MODEL.
+        f"EMBEDDING_NIM_MODEL_NAME={rag['embedding']['model']}",
         f"MILVUS_DATABASE={rag.get('database', 'default')}",
         f"RERANKER_BASE_URL={url('retriever', 'reranker', '/rerank')}",
         f"RERANKER_MODEL={rag['reranker']['model']}",

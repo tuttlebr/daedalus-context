@@ -9,7 +9,7 @@ import os
 import time
 from pathlib import Path
 from pymilvus import MilvusClient
-from refresh_state import atomic_json, collection_lock, contract_fingerprint
+from refresh_state import atomic_json, collection_lock, contract_fingerprint, refresh_owned
 
 contract = json.loads(Path('/etc/refresh/contract.json').read_text())
 source_db = contract['milvus_database']
@@ -38,7 +38,12 @@ with contextlib.ExitStack() as stack:
         client.create_database(archive_db)
     client.using_database('default')
     for name in list(client.list_collections()):
-        if client.describe_collection(name).get('description') == expected:
+        description = client.describe_collection(name).get('description')
+        if description == expected:
+            continue
+        # The Agent's `meta` and private upload collections share this database.
+        if not refresh_owned(name, description, contract['collections']):
+            print('Retained', name, flush=True)
             continue
         client.rename_collection(name, name, target_db=archive_db, timeout=60)
         state['moves'].append({'from':'default','to':archive_db,'collection':name,'at':time.time()})

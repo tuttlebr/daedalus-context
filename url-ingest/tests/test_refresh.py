@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from refresh_state import State, RunReport, collection_lock, contract_fingerprint, atomic_json
+from refresh_state import State, RunReport, collection_lock, contract_fingerprint, atomic_json, refresh_owned
 from refresh_milvus import Store, prepare_rows
 from refresh_fetch import fetch, SourceRemoved
 from refresh_monitor import status, metrics
@@ -181,3 +181,15 @@ class ChunkingTests(unittest.TestCase):
             extracted_text({"error": "failed"})
         self.assertEqual(extracted_text({"document_type": "structured", "metadata": {
             "table_metadata": {"table_content": "A | B"}}}), "A | B")
+
+
+class PromotionScopeTests(unittest.TestCase):
+    def test_promotion_archives_only_refresh_owned_collections(self):
+        contract = ["nvidia", "kubernetes"]
+        # Prior generations of contract collections and fingerprinted leftovers move.
+        self.assertTrue(refresh_owned("nvidia", None, contract))
+        self.assertTrue(refresh_owned("nvidia_old", "daedalus-refresh:abc", contract))
+        # The Agent's metadata and private upload collections are retained.
+        self.assertFalse(refresh_owned("meta", "", contract))
+        self.assertFalse(refresh_owned("user_uploads_1a2b", None, contract))
+        self.assertFalse(refresh_owned("private_docs", "custom description", contract))
