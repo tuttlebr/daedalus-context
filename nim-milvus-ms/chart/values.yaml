@@ -92,8 +92,8 @@ milvus:
             component: querynode
     extraEnv: *milvusAuthEnv
     resources:
-      requests: {cpu: 250m, memory: 12Gi}
-      limits: {cpu: "4", memory: 24Gi}
+      requests: {cpu: 250m, memory: 16Gi}
+      limits: {cpu: "4", memory: 32Gi}
   dataNode:
     replicas: 3
     topologySpreadConstraints:
