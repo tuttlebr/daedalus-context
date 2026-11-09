@@ -57,6 +57,16 @@ Use these repository contracts to guide investigation:
   [RAG schema](../../../../stack/rag-schema.yaml), and
   [collection contracts](../../../../stack/collections.yaml) for endpoint,
   embedding, dimension, metric, and generation compatibility.
+- Read the actual Agent consumers when changing generated settings. A sourceable
+  environment file is insufficient if it only emits a URL while the consumer
+  reads separate host/port variables. Keep existing URL keys compatible, test
+  topology changes, and regenerate both checked-in environment outputs. The
+  owning regression is `AgentEnvironmentTests` in `scripts/tests/test_contextctl.py`.
+- Exercise both role-aware Agent embeddings and NIM input requests without
+  manually adding template-owned prefixes. Provider probes from the Agent pod
+  establish API/network evidence, not execution of the Agent's retrieval tool
+  or cited model continuation. `scripts/tests/test_retriever_probe.py` checks
+  probe payloads and rejects invalid vectors with matching dimensions.
 - Check the topology's failure policy: optional reranking and tool failures must
   not disable core chat; ingestion failure must not erase existing search data.
 - For ingestion, locking, retries, replacements, deletion, freshness, or model

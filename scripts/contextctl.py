@@ -252,6 +252,8 @@ def agent_env(environment_name: str) -> str:
         )
 
     required = " ".join(environment["requiredCollections"])
+    ingestion = releases["nv-ingest"]
+    ingestion_api = ingestion["services"]["api"]
     lines = [
         "# Generated from stack/topology.yaml and stack/environments/"
         f"{environment_name}.yaml; do not edit.",
@@ -261,6 +263,10 @@ def agent_env(environment_name: str) -> str:
         f"RERANKER_BASE_URL={url('retriever', 'reranker', '/rerank')}",
         f"RERANKER_MODEL={rag['reranker']['model']}",
         f"MILVUS_URI={url('milvus', 'api')}",
+        # The Agent's Rust/Python document consumers take separate host/port
+        # settings. Keep the URL for existing operator/probe integrations.
+        f"NV_INGEST_HOST={ingestion_api['name']}.{ingestion['namespace']}.svc.cluster.local",
+        f"NV_INGEST_PORT={ingestion_api['port']}",
         f"NV_INGEST_ENDPOINT={url('nv-ingest', 'api')}",
         f"HINDSIGHT_API_URL={url('hindsight', 'api')}",
         f"KUBERNETES_MCP_SERVER={url('k8s-mcp', 'mcp', '/mcp')}",

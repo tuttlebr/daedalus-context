@@ -105,6 +105,17 @@ Set `CHECK_CONSUMER=false` only before Daedalus exists and only for targets that
 support that mode. Provider health alone does not prove that Daedalus can reach
 or authenticate to a service.
 
+These integration targets run synthetic provider requests from the Agent pod;
+they do not invoke the Rust tool runtime or establish end-to-end answer quality.
+The retriever probe exercises the Agent's role-aware embedding request, NIM
+embedding input, native reranking and NIM ranking. It checks finite normalized
+vectors and API response shape, without writing documents. Model templates add
+query/document prefixes; the probe must send raw text just like the consumers.
+Milvus connectivity and collection counts alone do not prove that a query
+returns relevant passages with intact metadata and citations. Validate that
+separate path through the Agent when retrieval behavior changes, then check its
+model continuation through Switchyard when model input or continuation changes.
+
 `make health-stack` prints JSON and requires the context guard. For automation
 that must distinguish health states, use the direct command after a guarded
 preflight:

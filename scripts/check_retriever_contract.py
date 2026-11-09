@@ -2,6 +2,7 @@
 """Exercise the native Daedalus and NVIDIA-compatible retriever contracts."""
 
 import json
+import math
 import os
 import urllib.request
 
@@ -24,19 +25,29 @@ embedding_model = os.environ["EMBEDDING_MODEL"]
 reranker_model = os.environ["RERANKER_MODEL"]
 expected_dimension = int(os.environ.get("EXPECTED_DIMENSION", "2048"))
 
-embedding = post_json(
-    embedding_url,
-    {
-        "model": embedding_model,
-        "input": "query: Daedalus retriever health probe",
-        "input_type": "query",
-    },
-)
-vector = embedding["data"][0]["embedding"]
-if len(vector) != expected_dimension:
-    raise RuntimeError(
-        f"embedding dimension mismatch: expected {expected_dimension}, got {len(vector)}"
-    )
+# Match both actual consumers: the Agent sends role-aware messages and
+# NV-Ingest sends input/input_type. The model template owns role prefixes.
+probe_text = "Daedalus retriever health probe"
+for label, request in (
+    ("native", {"messages": [{"role": "query", "content": [
+        {"type": "text", "text": probe_text}
+    ]}]}),
+    ("nim", {"input": probe_text, "input_type": "query"}),
+):
+    embedding = post_json(embedding_url, {"model": embedding_model, **request})
+    data = embedding.get("data")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        raise RuntimeError(f"{label} embedding response must contain one result")
+    vector = data[0].get("embedding")
+    if not isinstance(vector, list) or len(vector) != expected_dimension:
+        raise RuntimeError(f"{label} embedding dimension mismatch: expected {expected_dimension}")
+    if any(
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+        or not math.isfinite(value) for value in vector
+    ):
+        raise RuntimeError(f"{label} embedding contains invalid values")
+    if not 0.99 <= sum(value * value for value in vector) <= 1.01:
+        raise RuntimeError(f"{label} embedding is not L2 normalized")
 
 native_ranking = post_json(
     native_reranker_url,
@@ -73,6 +84,8 @@ print(
     json.dumps(
         {
             "embeddingDimension": len(vector),
+            "nativeEmbeddings": "ok",
+            "nimEmbeddings": "ok",
             "nativeReranker": "ok",
             "nimReranker": "ok",
         },

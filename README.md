@@ -88,7 +88,17 @@ flowchart LR
     Agent --> Rank[Optional reranker]
     Agent --> Memory[Hindsight]
     Agent --> Tools[Kubernetes and UniFi MCP]
+    Agent --> Gateway[daedalus-switchyard]
+    Gateway --> Model[Answering model]
+    Agent --> Sandbox[daedalus-sandbox]
 ```
+
+The Agent owns orchestration, authenticated user scope, tool results and
+citations. It calls context services and the sandbox directly; Switchyard owns
+answering-model routing and transport. Retrieved evidence returns to the Agent
+and enters its next model continuation through Switchyard. Context does not
+select answering models or own sandbox execution. Hindsight implementation
+remains external to this repository.
 
 The [topology](stack/topology.yaml) declares deployment dependencies and failure
 boundaries. The orchestrator orders selected dependencies, blocks their
@@ -129,6 +139,11 @@ adapting the reference deployment.
 the stack files. Merge it into the Agent's deployment configuration and supply
 matching credentials through your secret-management process. The generated
 file is a contract, not an Agent deployment or a credential bundle.
+The ingestion consumer uses `NV_INGEST_HOST` and `NV_INGEST_PORT`;
+`NV_INGEST_ENDPOINT` is also emitted for URL-based integrations. Merge these
+settings into every Agent worker that ingests documents. Private upload storage
+and its credentials remain part of the Agent deployment, separate from curated
+collection refreshes.
 
 Query and document embeddings must use the same model revision and vector
 space. Equal dimensions alone do not establish compatibility. Daedalus uses
@@ -137,6 +152,10 @@ logits, so probability thresholds need model-specific calibration.
 
 Validate provider readiness, dependency/data health, and consumer requests
 separately. See [health and diagnostics](docs/operations.md#health-and-diagnostics).
+For changes spanning this stack, the Agent, Switchyard or sandbox in the parent
+Daedalus monorepo, use its `.agents/skills/daedalus-co-design/` workflow alongside
+this repository's maintenance skill. Context-only validation remains usable
+without the sibling repositories.
 
 ## Continuous refresh and embedding generations
 

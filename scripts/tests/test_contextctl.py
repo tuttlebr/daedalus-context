@@ -129,6 +129,29 @@ class OperationGraphTests(unittest.TestCase):
 
 
 class AgentEnvironmentTests(unittest.TestCase):
+    def test_ingestion_settings_follow_topology_in_agent_host_port_form(self):
+        original_load = contextctl.load_yaml
+
+        def changed_topology(path):
+            value = original_load(path)
+            if path.name == "topology.yaml":
+                value["releases"]["nv-ingest"]["services"]["api"].update(
+                    name="synthetic-ingestion", port=8765
+                )
+            return value
+
+        with mock.patch.object(contextctl, "load_yaml", side_effect=changed_topology):
+            rendered = contextctl.agent_env("production")
+        result = subprocess.run(
+            ["bash", "-euc", rendered +
+             '\nprintf "%s\\n" "$NV_INGEST_HOST" "$NV_INGEST_PORT" "$NV_INGEST_ENDPOINT"'],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(result.stdout.splitlines(), [
+            "synthetic-ingestion.daedalus.svc.cluster.local", "8765",
+            "http://synthetic-ingestion.daedalus.svc.cluster.local:8765",
+        ])
+
     def test_generated_environment_can_be_sourced_with_multiword_collections(self):
         result = subprocess.run(
             ["bash", "-euc", contextctl.agent_env("production") +
