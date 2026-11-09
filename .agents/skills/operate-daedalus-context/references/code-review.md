@@ -52,6 +52,14 @@ Use these repository contracts to guide investigation:
 - Root orchestration must preserve dependency ordering, failure propagation,
   exit status, and the wrong-context guard. Health reporting must distinguish
   provider readiness, dependency health, freshness, and consumer functionality.
+- A GPU device count does not establish serving readiness. For a model startup
+  failure, compare the effective argument list, selected GPU product, available
+  device memory and prior working allocation before changing wait behavior.
+  Keep explicit memory utilization and supported placement in durable values;
+  preserve the complete `extraArgs` list, model revision, cache claim and healthy
+  peer roles. The reference reranker render regression checks these boundaries.
+  A KAI sharing profile and whole-device allocation are different contracts;
+  do not restore annotations alone or treat host/shared memory as discrete VRAM.
 - Source deployment must build/push only selected locally owned image contexts,
   propagate the exact unique tags into recursive Make/Helm, and stop rollout on
   failed publication. `scripts/tests/test_deploy_source.py` exercises executable

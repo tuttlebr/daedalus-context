@@ -25,6 +25,11 @@ embedder:
       effect: NoSchedule
 
 reranker:
+  # This BF16 serving profile is validated on discrete L40S memory. A GPU count
+  # alone does not distinguish smaller A30 devices or GB10 shared host memory.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+    nvidia.com/gpu.product: NVIDIA-L40S
   service:
     type: NodePort
     port: 8000

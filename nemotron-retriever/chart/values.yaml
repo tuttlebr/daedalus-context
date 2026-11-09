@@ -110,6 +110,8 @@ reranker:
     - --limit-mm-per-prompt={"image":1}
     - --pooler-config={"seq_pooling_type":"MEAN","use_activation":false}
     - --chat-template-content-format=openai
+    # Keep the startup memory budget explicit across serving-runtime changes.
+    - --gpu-memory-utilization=0.65
   extraEnv: []
   service:
     type: ClusterIP

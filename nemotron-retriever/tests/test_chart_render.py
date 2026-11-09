@@ -109,6 +109,9 @@ class ChartRenderTests(unittest.TestCase):
         self.assertIn("--revision=39aa01525864f736e63f1d5742fc4cf59e754abd", args)
         self.assertIn("nvidia/llama-nemotron-rerank-1b-v2", args)
         for flag in ('--runner=pooling', '--dtype=bfloat16', '--max-model-len=32768',
+                     '--gpu-memory-utilization=0.65', '--max-num-seqs=4',
+                     '--compilation-config={"compile_mm_encoder":true}',
+                     '--limit-mm-per-prompt={"image":1}',
                      '--chat-template-content-format=openai',
                      '--pooler-config={"seq_pooling_type":"MEAN","use_activation":false}'):
             self.assertIn(flag, args)
@@ -133,6 +136,39 @@ class ChartRenderTests(unittest.TestCase):
             {"role": "query", "content": [{"type": "text", "text": "Question"}]},
             {"role": "document", "content": [{"type": "image"}, {"type": "text", "text": "Text"}]},
         ]), "[IMG] query: Question\n\npassage: Text")
+
+    def test_reference_reranker_placement_preserves_serving_and_storage_contracts(self):
+        base = helm_template()
+        reference = helm_template("--values", str(CHART_DIR / "values-daedalus.yaml"))
+        self.assertEqual(base.returncode, 0, base.stderr)
+        self.assertEqual(reference.returncode, 0, reference.stderr)
+        rendered = [list(filter(None, yaml.safe_load_all(result.stdout)))
+                    for result in (base, reference)]
+        deployments = [{r["metadata"]["labels"]["app.kubernetes.io/component"]:
+                        r["spec"]["template"]["spec"] for r in resources
+                        if r["kind"] == "Deployment"} for resources in rendered]
+        self.assertEqual(deployments[1]["reranker"].get("nodeSelector", {}), {
+            "kubernetes.io/arch": "amd64", "nvidia.com/gpu.product": "NVIDIA-L40S",
+        })
+        for role in ("reranker", "embedder"):
+            servers = [next(c for c in pods[role]["containers"] if c["name"] == role)
+                       for pods in deployments]
+            # A placement overlay must not replace the argument list or change
+            # model identity, checkpoint, GPU allocation, or embedder settings.
+            self.assertEqual(servers[0]["args"], servers[1]["args"])
+            self.assertEqual(servers[0]["resources"], servers[1]["resources"])
+            utilization = [arg for arg in servers[1]["args"]
+                           if arg.startswith("--gpu-memory-utilization=")]
+            self.assertEqual(utilization, ["--gpu-memory-utilization=" +
+                                           ("0.65" if role == "reranker" else "0.45")])
+        claims = [[r for r in resources if r["kind"] == "PersistentVolumeClaim"]
+                  for resources in rendered]
+        self.assertEqual(claims[0], claims[1])
+        self.assertEqual(len(claims[1]), 1)
+        cache = next(v for v in deployments[1]["reranker"]["volumes"]
+                     if v["name"] == "model-cache")
+        self.assertEqual(cache["persistentVolumeClaim"]["claimName"],
+                         claims[1][0]["metadata"]["name"])
 
     def test_component_specific_ingress_cidrs_are_rendered(self):
         result = helm_template(
