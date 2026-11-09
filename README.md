@@ -57,8 +57,11 @@ make health-stack
 ```
 
 Follow the [deployment prerequisites](docs/deployment.md#prerequisites) first.
-`make deploy` installs selected services and checks provider health. Publishing
-images, publishing a corpus, and populating collections are separate operations.
+`make deploy` validates the selected services, builds and publishes their locally
+owned images from the current checkout, reconciles releases, and checks provider
+health. Each build gets a unique versioned tag so existing workloads receive the
+new image. Existing storage and data are retained. Corpus publication and
+collection refresh remain separate operations.
 
 ## Stack model
 

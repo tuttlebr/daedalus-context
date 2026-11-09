@@ -66,7 +66,10 @@ remaining findings and validation limits explicitly.
   `make images-build`, `make images-release-refs`, or `make images-publish`.
 - Prepare a cluster operation with `make doctor`, `make show-config`, and
   `make validate-cluster`.
-- Reconcile selected services with `make deploy` or `make update`. Use
+- Use `make deploy` to validate, build/publish selected locally owned images
+  from the checkout, reconcile exact unique versioned tags, and check health.
+  Use `make update` to reconcile already-published references. Upstream images
+  stay pinned; selected Hindsight delegates to its external owner. Use
   `make redeploy` only for an intentional restart.
 - Diagnose in layers with `make health-provider`,
   `make health-dependencies`, and `make health-integration`.
@@ -116,8 +119,11 @@ default Secret existence checks, and capacity checks honor the selection.
   `ENVIRONMENT=development` changes acceptance policy, not placement or storage.
   Use the documented per-component `*_VALUES_FILE` inputs for another site;
   explicit root `--set` values retain precedence. Preserve existing defaults.
-- Keep image build and registry publication separate from Kubernetes
-  reconciliation.
+- Treat `make deploy` as both registry and cluster writes. Its source workflow
+  gates context, charts and selected Secrets before building/publishing, and
+  publishes every selected owned image before reconciling any release. Preserve
+  runtime image overrides, component/schedule selection and all durable data.
+  Standalone `images-*` commands remain available for publication without rollout.
 - Never delete PVCs, reset etcd, drop collections, or rerun ingestion merely to
   test persistence or health.
 - Treat a provider process check, dependency check, and Daedalus integration

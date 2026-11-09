@@ -4,6 +4,9 @@ The source tree is developed as one Daedalus Context repository. A public source
 release, a public image release, and a production rollout are separate actions.
 Use [Contributing](../CONTRIBUTING.md) for local acceptance and
 [deployment](deployment.md) for the runtime contract.
+`make deploy` combines private/configured-registry image publication and cluster
+rollout for selected local sources. Use `make images-publish` when publication
+without a rollout is intended; neither command publishes the Git repository.
 
 ## Source publication
 

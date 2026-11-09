@@ -176,12 +176,25 @@ for another deployment; never add a controller private key.
 Image workflows honor `ENV_FILE` just like deployment (default: root `.env`).
 A clone without `.env` can still validate the default image specification.
 
-Choose registry references for all owned images in `.env`. The Compose image
-variables and Kubernetes image variables must identify the same published
-artifacts. For example, `K8S_MCP_COMPOSE_IMAGE` selects the build destination and
-`K8S_MCP_IMAGE` selects the deployment reference. Use a new immutable SemVer tag
-for each changed image; changing `DAEDALUS_CONTEXT_IMAGE_VERSION` alone does not
-replace explicit component tags.
+Choose registry references for all owned images in `.env` and configure Docker
+registry access before deployment. Anonymous LAN registries remain supported.
+`make deploy` uses the Kubernetes runtime image variables as its authoritative
+repositories and base SemVer tags, including explicit Make command-line
+overrides. It builds only selected components' owned contexts and publishes
+unique tags such as `1.2.3-deploy.<utc-time>.<nonce>`. Those exact references are
+printed and sent to reconciliation without rewriting `.env`. Tags change on
+each invocation, so a cached old image cannot prevent the new source rollout.
+Source deployments use `IMAGE_PLATFORM=linux/amd64` for the reference cluster,
+including on ARM developer hosts. Override it only with reviewed Dockerfile,
+dependency and chart placement support for the selected components. This is a
+single deployment platform; a multi-platform distribution is a separate image
+release workflow.
+
+For the standalone image commands below, keep Compose aliases aligned with the
+runtime variables. For example, `K8S_MCP_COMPOSE_IMAGE` selects their build
+destination and `K8S_MCP_IMAGE` selects the deployment reference. Use a new
+immutable SemVer tag for each standalone release; changing
+`DAEDALUS_CONTEXT_IMAGE_VERSION` alone does not replace explicit component tags.
 
 ```bash
 make images-validate
@@ -198,7 +211,13 @@ service names; it is distinct from runtime `COMPONENTS`. The reference runner an
 parser builds download pinned dependencies/models and can be large. See their
 Dockerfiles and model notices before redistributing built images.
 
-`make deploy` and `make update` never build or publish images. Record reviewed
+`make update` reconciles already-published image references without building or
+publishing. `make deploy` includes publication after its context, chart and
+credential gates. Build/push failures prevent cluster reconciliation. Upstream
+images retain their pinned versions; only the local parser is built for
+`nv-ingest`, and only the crawler/runner are built for `url-ingest`. Hindsight
+uses its external owner's deployment workflow, not this repository's image
+builder. Record reviewed
 source revisions, image/model versions, and upstream dependency changes in the
 [component lock](../stack/components.lock.yaml). Helm dependencies are pinned
 and vendored; update `Chart.yaml`, `Chart.lock`, and the archive together.
@@ -229,7 +248,10 @@ make health-provider
 ```
 
 `deploy` repeats doctor, configuration, chart/cluster, and Secret gates, then
-reconciles releases in dependency order and checks provider health. Cluster
+builds/pushes selected local images, reconciles releases in dependency order and
+checks provider health. It retains PVCs, collections, corpus and refresh state;
+it neither seeds data nor triggers refresh Jobs. Preserve the configured
+`URL_INGEST_SUSPEND` setting when enabling or suspending schedules. Cluster
 validation is read-only: local renders, client dry-runs, and capacity inspection.
 It does not reproduce every deployment `--set` override, and is not proof of
 schedulability, successful image pulls, or working data paths.

@@ -13,6 +13,8 @@ KUBECTL ?= kubectl
 HELM ?= helm
 JQ ?= jq
 COMPOSE ?= docker compose
+# Match the reference deployment even when the operator runs on an ARM host.
+IMAGE_PLATFORM ?= linux/amd64
 ENV_FILE ?= $(ROOT_DIR)/.env
 IMAGE_BUILD_SERVICES := k8s-mcp-server-read-only unifi-network-mcp-server pdf-server url-ingest nv-ingest-ms-tasks nv-ingest-parser
 DAEDALUS_CONTEXT_IMAGE_VERSION ?= 0.1.0
@@ -137,8 +139,8 @@ PDF_SOURCE_HOST_PATH ?= $(ROOT_DIR)/pdf-server
 PDF_SOURCE_NODE ?= $(URL_INGEST_SOURCE_NODE)
 CORPUS_GENERATION ?=
 
-# Build and publish are deliberately separate from deployment. Both deploy and
-# update reconcile an already-published SemVer image release.
+# Deploy builds/publishes selected local sources with unique SemVer tags.
+# Update remains the explicit reconciliation path for already-published images.
 EXPOSE_NODEPORTS ?= false
 ENABLE_MILVUS_MONITORING ?= false
 CHECK_CONSUMER ?= true
@@ -165,7 +167,7 @@ endif
 .PHONY: help doctor show-config require-context \
 	images-validate images-build images-push images-release-refs images-publish \
 	compose-config compose-build compose-push compose-release-refs compose-publish \
-	preflight validate validate-context validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy restart recovery-status recovery-status-workflow \
+	preflight validate validate-context validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow deploy-reconcile update redeploy restart recovery-status recovery-status-workflow \
 	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
@@ -181,7 +183,7 @@ endif
 	healthcheck-hindsight healthcheck-milvus healthcheck-retriever healthcheck-nv-ingest healthcheck-pdf-server healthcheck-url-ingest \
 	healthcheck-k8s-mcp healthcheck-unifi-mcp
 
-CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow update redeploy recovery-status-workflow \
+CLUSTER_TARGETS := preflight validate validate-cluster deploy-workflow deploy-reconcile update redeploy recovery-status-workflow \
 	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	health-provider health-dependencies health-integration health-stack healthcheck healthcheck-agent \
 	publish-corpus stage-data seed-data run-ingest \
@@ -421,7 +423,7 @@ define check_components
 	printf '\n%s summary: PASS (%s/%s)\n' '$(1)' "$$total" "$$total"
 endef
 
-deploy: ## [cluster write] Load configuration, validate, reconcile, and check selected components.
+deploy: ## [registry/cluster write] Validate, build/push selected local sources, reconcile, and check health; preserve data.
 	@[[ -f "$(ENV_FILE)" ]] || { \
 	  echo "Missing $(ENV_FILE). Copy .env.example and edit it before deployment." >&2; exit 1; \
 	}
@@ -432,10 +434,14 @@ deploy: ## [cluster write] Load configuration, validate, reconcile, and check se
 	  $(MAKE) --no-print-directory deploy-workflow
 
 deploy-workflow:
-	@$(MAKE) --no-print-directory doctor
-	@$(MAKE) --no-print-directory show-config
-	@$(MAKE) --no-print-directory validate-cluster
-	@$(MAKE) --no-print-directory verify-shared-secrets
+	@python3 "$(ROOT_DIR)/scripts/deploy_source.py" --make "$(MAKE)" --compose "$(COMPOSE)" --platform "$(IMAGE_PLATFORM)" \
+	  --env-file "$(ENV_FILE)" --components $(COMPONENTS) \
+	  --image "K8S_MCP_IMAGE=$(K8S_MCP_IMAGE)" --image "UNIFI_MCP_IMAGE=$(UNIFI_MCP_IMAGE)" \
+	  --image "PDF_SERVER_IMAGE=$(PDF_SERVER_IMAGE)" --image "URL_INGEST_IMAGE=$(URL_INGEST_IMAGE)" \
+	  --image "URL_INGEST_RUNNER_IMAGE=$(URL_INGEST_RUNNER_IMAGE)" \
+	  --image "NV_INGEST_PARSER_IMAGE=$(NV_INGEST_PARSER_IMAGE)"
+
+deploy-reconcile:
 	@"$(ROOT_DIR)/scripts/contextctl" operate --action deploy --components $(COMPONENTS)
 	@$(MAKE) --no-print-directory health-provider
 

@@ -8,14 +8,25 @@ approved literal `EXPECTED_CONTEXT`.
 ## Deploy and Update
 
 All eight components are selected by default. This one command loads `.env`,
-runs the deployment gates, reconciles the components, and checks provider
-health:
+runs the deployment gates, builds and pushes selected locally owned images from
+the current checkout, reconciles the components, and checks provider health:
 
 ```bash
 make deploy
 ```
 
-Deployment is idempotent. It does not publish a corpus or launch ingestion Jobs. `update` also
+Each source deployment derives unique SemVer tags from the configured runtime
+image references. The tags are printed and passed directly to Helm through the
+existing component recipes; `.env` keeps its base references. This makes new
+local source take effect even when the configured base tag is unchanged.
+To reuse that build with `make update`, record the printed image assignments in
+the runtime configuration first. Otherwise `update` uses the configured base
+references, which may select an older published image. Helm history retains the
+deployed references; another `make deploy` always builds fresh deployment tags.
+Milvus, retriever and the upstream NV-Ingest images retain their pinned versions.
+Hindsight delegates to its external owner's existing deployment workflow.
+
+Deployment does not publish a corpus or launch ingestion Jobs. `update` also
 restarts the PDF server to reload the selected corpus; other components roll
 only when their workload templates change. URL CronJobs default to suspended and MCP
 Services default to ClusterIP for a safe fresh installation.
@@ -34,13 +45,20 @@ healthy.
 Use the lifecycle targets according to intent:
 
 ```bash
-make deploy     # Load config, validate, reconcile, and check provider health.
+make deploy     # Validate, build/push selected local sources, reconcile, and check health.
 make update     # Reconcile already-published versioned releases.
 make redeploy   # Deliberately restart selected long-running workloads.
 make restart    # Load .env and run redeploy (all components by default).
 ```
 
 None of these targets uninstall releases or delete PVCs.
+`deploy` keeps configured storage, source state, collection data and schedule
+selection. Running ingestion Jobs continue with their original images; the
+updated CronJob template applies to future runs. Selected dependency releases
+are reconciled in dependency order; omitted components are neither built nor
+restarted. Failed validation/build stops publication, and failed publication
+stops reconciliation. Successfully pushed images may remain if a later push or
+rollout fails; inspect Helm history and the printed image references for rollback.
 `restart` and `redeploy` operate only on this repository's selected releases,
 including Hindsight when selected. They do not restart other applications
 merely because those applications share `daedalus`. Disabled replicas remain disabled.

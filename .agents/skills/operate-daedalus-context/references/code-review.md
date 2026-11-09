@@ -52,6 +52,12 @@ Use these repository contracts to guide investigation:
 - Root orchestration must preserve dependency ordering, failure propagation,
   exit status, and the wrong-context guard. Health reporting must distinguish
   provider readiness, dependency health, freshness, and consumer functionality.
+- Source deployment must build/push only selected locally owned image contexts,
+  propagate the exact unique tags into recursive Make/Helm, and stop rollout on
+  failed publication. `scripts/tests/test_deploy_source.py` exercises executable
+  fake clients, including failure ordering and unchanged schedule/config inputs.
+  Upstream images and external Hindsight keep their existing ownership. Do not
+  implement source refresh by deleting storage or launching ingestion Jobs.
 - Compare chart defaults, root overrides, generated settings, and actual client
   contracts. Consult [schemas](../../../../stack/schemas/),
   [RAG schema](../../../../stack/rag-schema.yaml), and
