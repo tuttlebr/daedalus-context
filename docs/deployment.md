@@ -252,7 +252,11 @@ builds/pushes selected local images, reconciles releases in dependency order and
 checks provider health. It retains PVCs, collections, corpus and refresh state;
 it neither seeds data nor triggers refresh Jobs. Preserve the configured
 `URL_INGEST_SUSPEND` setting when enabling or suspending schedules. Cluster
-validation is read-only: local renders, client dry-runs, and capacity inspection.
+validation is read-only: local renders, `kubectl create --dry-run=client
+--validate=strict`, and capacity inspection. The client validates manifests without
+creating resources or merging against existing Helm-managed objects. It does not
+require or add kubectl's `last-applied-configuration` annotation; Helm continues
+to own release upgrades. Discovery/schema reads can still contact the API server.
 It does not reproduce every deployment `--set` override, and is not proof of
 schedulability, successful image pulls, or working data paths.
 The capacity preflight checks selected Milvus and retriever constraints; inspect

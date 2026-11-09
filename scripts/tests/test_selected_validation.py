@@ -41,15 +41,17 @@ class SelectedValidationTests(unittest.TestCase):
                            env=env, check=True, capture_output=True)
             self.assertEqual(log.read_text().splitlines(), ["--namespace daedalus get secret k8s-mcp-auth"])
 
-    def test_cluster_chart_validation_renders_only_selected_component_with_overlay(self):
+    def run_cluster_chart_validation(self, failure=""):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             log = directory / "calls"
+            client_log = directory / "client-calls"
             kubectl = directory / "kubectl"
             kubectl.write_text(
                 '#!/usr/bin/env bash\n'
                 'if [[ "$*" == "config current-context" ]]; then echo test-context; '
-                'else cat >/dev/null; fi\n'
+                'else printf "%s\\n" "$*" >> "$TEST_CLIENT_CALLS"; cat >/dev/null; '
+                'if [[ "${TEST_FAILURE:-}" == client ]]; then echo "fixture schema rejected" >&2; exit 8; fi; fi\n'
             )
             kubectl.chmod(0o755)
             helm = directory / "helm"
@@ -57,6 +59,7 @@ class SelectedValidationTests(unittest.TestCase):
                 '#!/usr/bin/env bash\n'
                 'printf "%s\\n" "$*" >> "$TEST_CALLS"\n'
                 'echo "apiVersion: v1"\n'
+                'if [[ "${TEST_FAILURE:-}" == renderer ]]; then echo "fixture render failed" >&2; exit 7; fi\n'
             )
             helm.chmod(0o755)
             overlay = directory / "site values.yaml"
@@ -66,14 +69,32 @@ class SelectedValidationTests(unittest.TestCase):
                  "validate-cluster", "COMPONENTS=k8s-mcp", "EXPECTED_CONTEXT=test-context",
                  f"KUBECTL={kubectl}", f"HELM={helm}", f"K8S_MCP_VALUES_FILE={overlay}",
                  "HINDSIGHT_ROOT=/does-not-exist"],
-                cwd=ROOT, env={**os.environ, "TEST_CALLS": str(log)},
+                cwd=ROOT, env={**os.environ, "TEST_CALLS": str(log),
+                               "TEST_CLIENT_CALLS": str(client_log), "TEST_FAILURE": failure},
                 capture_output=True, text=True,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
             calls = log.read_text().splitlines()
             self.assertEqual(len(calls), 1)
             self.assertIn("template k8s-mcp-server", calls[0])
             self.assertIn(f"--values {overlay}", calls[0])
+            self.assertEqual(client_log.read_text().splitlines(), [
+                "--namespace=daedalus create --dry-run=client --validate=strict -f -"
+            ])
+            return result
+
+    def test_cluster_chart_validation_does_not_apply_to_helm_managed_objects(self):
+        result = self.run_cluster_chart_validation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Selected chart validation passed.", result.stdout)
+
+    def test_cluster_chart_validation_preserves_render_and_schema_failures(self):
+        for failure, error in (("renderer", "fixture render failed"),
+                               ("client", "fixture schema rejected")):
+            with self.subTest(failure=failure):
+                result = self.run_cluster_chart_validation(failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+                self.assertNotIn("Selected chart validation passed.", result.stdout)
 
     def test_image_commands_honor_explicit_environment_file(self):
         with tempfile.TemporaryDirectory() as directory:

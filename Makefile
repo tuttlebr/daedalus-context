@@ -1128,6 +1128,9 @@ validate-ha: ## [read-only local] Require an approved numeric HA acceptance poli
 render-agent-env: ## [read-only local] Print generated Daedalus provider endpoints.
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)"
 
+# Validate manifests without the client-side apply merge against existing Helm
+# resources. Create with client dry-run keeps schema validation and never creates
+# or patches resources or their last-applied annotations.
 validate-cluster: preflight validate-helm ## [read-only cluster] Validate selected chart manifests and capacity with client dry-runs.
 	@KUBECTL="$(KUBECTL)" MILVUS_VALUES_FILE="$(MILVUS_VALUES_FILE)" \
 	  RETRIEVER_VALUES_FILE="$(RETRIEVER_VALUES_FILE)" PYTHONDONTWRITEBYTECODE=1 \
@@ -1146,6 +1149,6 @@ validate-cluster: preflight validate-helm ## [read-only cluster] Validate select
 	    url-ingest) $(HELM) template url-ingest "$(URL_INGEST_CHART)" $(call chart_values,URL_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" \
 	      --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
 	      --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" ;; \
-	  esac | $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null; \
+	  esac | $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" create --dry-run=client --validate=strict -f - >/dev/null; \
 	done
 	@echo "Selected chart validation passed."

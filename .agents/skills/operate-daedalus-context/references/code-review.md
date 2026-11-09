@@ -58,6 +58,12 @@ Use these repository contracts to guide investigation:
   fake clients, including failure ordering and unchanged schedule/config inputs.
   Upstream images and external Hindsight keep their existing ownership. Do not
   implement source refresh by deleting storage or launching ingestion Jobs.
+- Validate Helm-rendered manifests with `kubectl create --dry-run=client
+  --validate=strict`, not client-side apply. Apply dry-run reads existing objects
+  and emits missing last-applied warnings for Helm-managed resources even though
+  it does not persist a patch. Keep schema/render failures fatal; do not fix this
+  by adding annotations, disabling validation, or filtering stderr. The command
+  and failure-path regression is `scripts/tests/test_selected_validation.py`.
 - Compare chart defaults, root overrides, generated settings, and actual client
   contracts. Consult [schemas](../../../../stack/schemas/),
   [RAG schema](../../../../stack/rag-schema.yaml), and
