@@ -1,7 +1,8 @@
 # Nemotron Retriever
 
 This chart deploys independent embedding and reranking vLLM servers with
-compatibility adapters for Daedalus and NV-Ingest. The active model identities,
+compatibility adapters for daedalus-agent and NV-Ingest in the Daedalus Context
+monorepo. The active model identities,
 revisions, dimensions, and API contracts are declared in
 [stack/rag-schema.yaml](../stack/rag-schema.yaml). Images, serving flags,
 resources, replicas, and caches are configured in [values.yaml](chart/values.yaml).
@@ -14,7 +15,7 @@ Keep chart settings, the retrieval schema, and the
 ## Deployment
 
 Run from the repository root after the
-[configuration and context setup](../README.md#configuration):
+[configuration and context setup](../docs/deployment.md#configuration):
 
 ```bash
 make deploy COMPONENTS=retriever
@@ -24,7 +25,10 @@ make health-integration COMPONENTS=retriever
 ```
 
 The root workflow applies [values-daedalus.yaml](chart/values-daedalus.yaml) in the
-shared `daedalus` namespace. GPU placement, compatible kernels, available device
+shared `daedalus` namespace. This is a reference cluster profile with Cilium
+networking and reviewed GPU/cache settings. Review it before using another
+cluster; the development environment does not replace it with a generic GPU
+setup. GPU placement, compatible kernels, available device
 memory, model access, and cache storage must satisfy the selected serving
 profile. Initial startup can require model downloads. Set
 `huggingFace.existingSecret` when credentials are required; manage the token
@@ -72,9 +76,10 @@ curl --fail-with-body http://127.0.0.1:8000/v1/embeddings \
   --data '{"input":["Robots use AI to perceive and plan."],"input_type":"document"}'
 ```
 
-If using [smoke-test.sh](smoke-test.sh), explicitly set `EMBED_BASE_URL` and
-`EMBED_MODEL` to the intended endpoint and the model in the retrieval schema.
-The helper's standalone defaults are not the root deployment contract.
+[smoke-test.sh](smoke-test.sh) uses this localhost port-forward and lets the
+adapter select its configured model. Set `EMBED_BASE_URL` and optionally
+`EMBED_MODEL` to test another intended endpoint or served alias. The helper
+requires Python 3 and curl and makes an embedding request without writing data.
 
 For ranking, forward the reranker Service to local port 8001 using the same
 context setup, then call the native API:
@@ -120,8 +125,8 @@ including the ability of multimodal requests to fetch caller-supplied URLs.
 
 ## LAN access
 
-The base chart uses ClusterIP. The root production overlay and
-[custom-values.yaml](chart/custom-values.yaml) configure fixed NodePorts:
+The base chart uses ClusterIP. The root
+[production overlay](chart/values-daedalus.yaml) configures fixed NodePorts:
 
 | Service | NodePort | API port |
 | --- | --- | --- |
@@ -141,7 +146,7 @@ allowlist on all forwarded traffic. A stricter boundary requires a reviewed
 network-boundary or source-restricted LoadBalancer configuration.
 
 Preserve existing endpoint names, ports, routes, and ordinary LAN clients.
-Keep production and custom exposure overlays aligned. Before exposure changes,
+Before exposure changes,
 retain rollback configuration and obtain approval for any compatibility break;
 verify both API functionality and non-node LAN access afterward.
 

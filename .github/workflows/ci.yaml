@@ -1,0 +1,138 @@
+name: Monorepo CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts-and-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.2
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Root contracts and all owned charts
+        run: make validate-context
+      - name: Ingestion and publication tests
+        run: |
+          python -m unittest discover -s url-ingest/tests -v
+          make -C pdf-server test
+          make -C nv-ingest test
+          python -m unittest discover -s nv-ingest/local-parser -v
+      - name: Image specification
+        run: make images-validate
+      - name: URL ingestion Kubernetes schemas
+        run: helm template url-ingest url-ingest/chart --namespace daedalus > rendered-url-ingest.yaml
+      - uses: docker://ghcr.io/yannh/kubeconform:v0.6.7
+        with:
+          args: "-strict -ignore-missing-schemas rendered-url-ingest.yaml"
+      - name: Documentation links
+        run: python .github/scripts/check_docs.py
+      - name: Shell syntax
+        run: git ls-files -z '*.sh' | xargs -0 -r -n 1 bash -n
+
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [k8s-multicluster-mcp, unifi-network-mcp]
+    defaults:
+      run:
+        working-directory: ${{ matrix.component }}/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.component }}/src/go.mod
+          cache-dependency-path: ${{ matrix.component }}/src/go.sum
+      - name: Format, vet, test, and build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go build ./...
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: url-ingest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo test --locked
+
+  k8s-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: k8s-multicluster-mcp/src/go.mod
+          cache-dependency-path: k8s-multicluster-mcp/src/go.sum
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          working-directory: k8s-multicluster-mcp/src
+
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [k8s-multicluster-mcp/src, unifi-network-mcp/src, pdf-server]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.context }}
+          cache-to: type=gha,scope=${{ matrix.context }},mode=max
+
+  security:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [k8s-multicluster-mcp, unifi-network-mcp]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ matrix.component }}/src
+          severity: CRITICAL,HIGH
+          exit-code: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.component }}/src/go.mod
+          cache-dependency-path: ${{ matrix.component }}/src/go.sum
+      - name: Go vulnerability scan
+        working-directory: ${{ matrix.component }}/src
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

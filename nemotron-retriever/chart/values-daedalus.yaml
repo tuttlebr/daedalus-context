@@ -1,5 +1,5 @@
-# Production values for the shared Daedalus namespace. Keep LAN exposure aligned
-# with custom-values.yaml; the Agent continues using the internal Service names.
+# Reference-cluster values for the shared Daedalus namespace.
+# Fixed LAN NodePorts and the Agent's internal Service names are stable contracts.
 networkPolicy:
   ciliumNodePort:
     enabled: true

@@ -40,7 +40,7 @@ maps block coordinates back to the original page, and retains the original
 prediction when a crop does not recover additional content.
 
 Use the root image and deployment targets documented in
-[DEPLOYMENT.md](../DEPLOYMENT.md). `LOCAL_DOCUMENT_PARSE_ENDPOINT` selects the
+[NV-Ingest operations](../README.md). `LOCAL_DOCUMENT_PARSE_ENDPOINT` selects the
 internal HTTP service. The root deployment includes a source checksum in the
 NV-Ingest environment, restarting workers when the mounted engine changes.
 When upgrading NV-Ingest, revalidate both mounted Python module paths, the

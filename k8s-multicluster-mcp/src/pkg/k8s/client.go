@@ -334,6 +334,7 @@ func (c *Client) ListResources(ctx context.Context, kind, namespace, labelSelect
 	return resources, nil
 }
 
+//nolint:gocritic // Pagination mutates a private copy of the caller's ListOptions.
 func listDynamicResources(ctx context.Context, resource dynamic.ResourceInterface, options metav1.ListOptions) (*unstructured.UnstructuredList, error) {
 	if options.Limit == 0 {
 		options.Limit = dynamicListPageLimit
@@ -1643,23 +1644,11 @@ func activePodUIDsFromList(pods *corev1.PodList) map[types.UID]bool {
 	return uids
 }
 
-// filterRecentEvents returns non-Normal events from the last `window`,
+// filterRecentEventList returns non-Normal events from the last `window`,
 // excluding events whose involved Pod no longer exists (stale events from
 // previous ReplicaSet generations after rollout restarts).  Results are
 // deduplicated by (namespace, involved object, reason) and sorted by
 // aggregate event count descending.
-func (c *Client) filterRecentEvents(ctx context.Context, window time.Duration, maxResults int) []map[string]interface{} {
-	allEvents, err := c.clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{
-		FieldSelector: "type!=Normal",
-	})
-	if err != nil {
-		return nil
-	}
-
-	activePodUIDs := c.getActivePodUIDs(ctx)
-	return filterRecentEventList(allEvents, activePodUIDs, window, maxResults)
-}
-
 func filterRecentEventList(allEvents *corev1.EventList, activePodUIDs map[types.UID]bool, window time.Duration, maxResults int) []map[string]interface{} {
 	if allEvents == nil {
 		return nil
@@ -2238,7 +2227,7 @@ func (c *Client) GetServiceEndpoints(ctx context.Context, name, namespace string
 	var (
 		service      *corev1.Service
 		serviceErr   error
-		endpoints    *corev1.Endpoints
+		endpoints    *corev1.Endpoints //nolint:staticcheck // Preserve the existing Endpoints response and older-cluster compatibility.
 		endpointsErr error
 	)
 	runConcurrentTasks(
@@ -3411,9 +3400,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Lock()
 			details[i]["deployments"] = deploymentInfo
 			detailLocks[i].Unlock()
-		})
-
-		tasks = append(tasks, func() {
+		}, func() {
 			statefulSets, err := c.clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(statefulSets.Items) == 0 {
 				return
@@ -3437,9 +3424,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Lock()
 			details[i]["statefulSets"] = statefulSetInfo
 			detailLocks[i].Unlock()
-		})
-
-		tasks = append(tasks, func() {
+		}, func() {
 			daemonSets, err := c.clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(daemonSets.Items) == 0 {
 				return
@@ -3463,9 +3448,7 @@ func (c *Client) getClusterSummaryNamespaceDetails(ctx context.Context, nsList *
 			detailLocks[i].Lock()
 			details[i]["daemonSets"] = daemonSetInfo
 			detailLocks[i].Unlock()
-		})
-
-		tasks = append(tasks, func() {
+		}, func() {
 			jobs, err := c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
 			if err != nil || len(jobs.Items) == 0 {
 				return

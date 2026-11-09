@@ -48,10 +48,10 @@ func TestLogWindowMetadata(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 18, 16, 30, 0, 0, time.FixedZone("EDT", -4*60*60))
 	metadata := logWindowMetadata(observedAt, 50, 3600)
 
-	if got := metadata["observedAt"].(time.Time); !got.Equal(observedAt) || got.Location() != time.UTC {
+	if got, ok := metadata["observedAt"].(time.Time); !ok || !got.Equal(observedAt) || got.Location() != time.UTC {
 		t.Fatalf("observedAt = %v, want UTC %v", got, observedAt.UTC())
 	}
-	if got := metadata["windowStart"].(time.Time); !got.Equal(observedAt.Add(-time.Hour)) {
+	if got, ok := metadata["windowStart"].(time.Time); !ok || !got.Equal(observedAt.Add(-time.Hour)) {
 		t.Fatalf("windowStart = %v, want %v", got, observedAt.Add(-time.Hour))
 	}
 	if metadata["timestamps"] != true {

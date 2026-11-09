@@ -6,7 +6,7 @@ adds an API disruption budget and local Nemotron Parse inference.
 dependencies, and Secret references.
 
 Use root `make deploy COMPONENTS="milvus retriever nv-ingest"` after the
-[root configuration setup](../../README.md#configuration). The root recipe
+[root configuration setup](../../docs/deployment.md#configuration). The root recipe
 passes the local parser endpoint and uses the required
 [post-renderer](../helm-post-renderer.sh). A bare Helm install omits
 those environment-specific inputs.
@@ -19,9 +19,9 @@ The existing internal endpoint `http://nv-ingest-parser:8000` remains available.
 Required existing Secrets:
 
 - `ngc-secret`: container registry authentication;
-- `ngc-api`: `NGC_API_KEY`, `NGC_CLI_API_KEY`;
+- `ngc-api`: `NGC_API_KEY`;
 - `nv-ingest-object-store`: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`.
 
 The chart does not create these credentials. See
-[NV-Ingest operations](../DEPLOYMENT.md) for readiness, rollout,
+[NV-Ingest operations](../README.md) for readiness, rollout,
 and validation. Run root `make validate-helm` to check the active chart.

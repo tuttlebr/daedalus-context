@@ -6,7 +6,7 @@ references the PDF server's claim and externally managed Secrets. It does not
 publish corpus files or run ingestion as a Helm hook.
 
 Deploy through root `make deploy COMPONENTS=url-ingest` after the
-[root configuration setup](../../README.md#configuration). The root recipe
+[root configuration setup](../../docs/deployment.md#configuration). The root recipe
 regenerates the refresh contract from the retrieval schema, collection contract,
 and source lists, and supplies the large URL lists with `--set-file`.
 

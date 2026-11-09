@@ -1,6 +1,7 @@
 # URL and PDF Refresh
 
-This component reconciles source documents into Milvus for Daedalus retrieval.
+This component reconciles source documents into Milvus for daedalus-agent
+retrieval as part of the Daedalus Context monorepo.
 The deployed entry point is [refresh.py](refresh.py), packaged in
 [Dockerfile.runner](Dockerfile.runner). The [Helm chart](chart/README.md)
 runs one daily CronJob per collection and a status/metrics service in the shared
@@ -34,7 +35,7 @@ progress belong in runtime reports, not this guide.
 ## Deploy and run
 
 Run the following from the repository root after the
-[configuration and context setup](../README.md#configuration). Deploy Milvus,
+[configuration and context setup](../docs/deployment.md#configuration). Deploy Milvus,
 retriever, NV-Ingest, and PDF server first, or verify that those dependencies
 are healthy. Required Secrets are managed outside Helm in the shared namespace.
 
@@ -173,3 +174,8 @@ Manual refresh Jobs are created from deployed CronJobs by the root refresh targe
 Build and publish runner changes through the root image workflow, then reconcile
 `URL_INGEST_RUNNER_IMAGE`. Keep image publication, deployment, and data work
 separate. Run `make validate-local` from the root for executable source changes.
+For an ingestion-only image build, use `make images-build
+IMAGE_BUILD_SERVICES="url-ingest nv-ingest-ms-tasks"` from the root. The runner's
+Compose service retains its historical name `nv-ingest-ms-tasks`; its deployed
+entry point is `refresh.py`. The component `docker-build` and `docker-push`
+targets delegate to the same root image workflow.

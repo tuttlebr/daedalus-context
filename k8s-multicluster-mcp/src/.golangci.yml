@@ -1,32 +1,39 @@
+version: "2"
 run:
-  timeout: 3m
   modules-download-mode: readonly
-
 linters:
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
     - gocritic
-    - gosimple
-    - typecheck
   disable:
     - depguard
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-    disabled-checks:
-      - ifElseChain
-      - singleCaseSwitch
-
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+      enabled-tags:
+        - diagnostic
+        - performance
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-use-default: true
   max-issues-per-linter: 50
   max-same-issues: 5
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

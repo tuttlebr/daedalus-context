@@ -10,12 +10,10 @@ run:
 	cd src && go run . --mode streamable-http --port $${SERVER_PORT:-8080}
 
 docker-build:
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  build unifi-network-mcp-server
+	$(MAKE) -C .. images-build IMAGE_BUILD_SERVICES=unifi-network-mcp-server
 
-docker-push: docker-build
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  push unifi-network-mcp-server
+docker-push:
+	$(MAKE) -C .. images-push IMAGE_BUILD_SERVICES=unifi-network-mcp-server
 
 validate: test build validate-chart
 

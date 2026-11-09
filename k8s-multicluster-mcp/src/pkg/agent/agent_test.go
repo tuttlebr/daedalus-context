@@ -57,8 +57,8 @@ func TestWriteConfigUsesExplicitChildMCPServer(t *testing.T) {
 		t.Fatalf("autoupdate should be false, got %v", config["autoupdate"])
 	}
 
-	mcp := config["mcp"].(map[string]interface{})
-	k8s := mcp["k8s"].(map[string]interface{})
+	mcp := requireConfigType[map[string]interface{}](t, config["mcp"])
+	k8s := requireConfigType[map[string]interface{}](t, mcp["k8s"])
 	if k8s["type"] != "local" {
 		t.Fatalf("unexpected mcp type: %v", k8s["type"])
 	}
@@ -69,7 +69,7 @@ func TestWriteConfigUsesExplicitChildMCPServer(t *testing.T) {
 		t.Fatalf("unexpected mcp timeout: %v", k8s["timeout"])
 	}
 
-	gotCommand := k8s["command"].([]interface{})
+	gotCommand := requireConfigType[[]interface{}](t, k8s["command"])
 	wantCommand := []interface{}{
 		"/usr/local/bin/k8s-mcp-server",
 		"--mode",
@@ -80,7 +80,7 @@ func TestWriteConfigUsesExplicitChildMCPServer(t *testing.T) {
 		t.Fatalf("command = %#v, want %#v", gotCommand, wantCommand)
 	}
 
-	env := k8s["environment"].(map[string]interface{})
+	env := requireConfigType[map[string]interface{}](t, k8s["environment"])
 	if env["KUBECONFIG"] != "/home/appuser/.kube/config" {
 		t.Fatalf("unexpected KUBECONFIG: %v", env["KUBECONFIG"])
 	}
@@ -99,14 +99,14 @@ func TestWriteConfigReadOnlyAndModelOverride(t *testing.T) {
 		t.Fatalf("unexpected model: %v", config["model"])
 	}
 
-	provider := config["provider"].(map[string]interface{})
+	provider := requireConfigType[map[string]interface{}](t, config["provider"])
 	if _, ok := provider["override"]; !ok {
 		t.Fatalf("override provider was not configured: %#v", provider)
 	}
 
-	mcp := config["mcp"].(map[string]interface{})
-	k8s := mcp["k8s"].(map[string]interface{})
-	gotCommand := k8s["command"].([]interface{})
+	mcp := requireConfigType[map[string]interface{}](t, config["mcp"])
+	k8s := requireConfigType[map[string]interface{}](t, mcp["k8s"])
+	gotCommand := requireConfigType[[]interface{}](t, k8s["command"])
 	wantCommand := []interface{}{
 		"/usr/local/bin/k8s-mcp-server",
 		"--mode",
@@ -131,9 +131,9 @@ func TestWriteConfigCopiesCapabilityEnv(t *testing.T) {
 	}
 
 	config := readConfig(t, configPath)
-	mcp := config["mcp"].(map[string]interface{})
-	k8s := mcp["k8s"].(map[string]interface{})
-	env := k8s["environment"].(map[string]interface{})
+	mcp := requireConfigType[map[string]interface{}](t, config["mcp"])
+	k8s := requireConfigType[map[string]interface{}](t, mcp["k8s"])
+	env := requireConfigType[map[string]interface{}](t, k8s["environment"])
 	if env["MCP_ENABLE_EXEC"] != "true" {
 		t.Fatalf("MCP_ENABLE_EXEC was not propagated: %#v", env)
 	}
@@ -162,4 +162,13 @@ func TestParseNDJSONErrorEvent(t *testing.T) {
 	if got != "rate limit exceeded" {
 		t.Fatalf("parseNDJSON() = %q, want %q", got, "rate limit exceeded")
 	}
+}
+
+func requireConfigType[T any](t *testing.T, value interface{}) T {
+	t.Helper()
+	typed, ok := value.(T)
+	if !ok {
+		t.Fatalf("unexpected config value type: %T", value)
+	}
+	return typed
 }

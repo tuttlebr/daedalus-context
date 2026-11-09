@@ -24,7 +24,7 @@ unverified paths, so the handoff states what was actually examined.
 
 | Surface | Code and contracts to trace | Local validation entry points |
 | --- | --- | --- |
-| Root orchestration and recovery | [Makefile](../../../../Makefile), [scripts](../../../../scripts/), [stack](../../../../stack/) | [scripts/tests](../../../../scripts/tests/), `make validate-helm` |
+| Root orchestration and recovery | [Makefile](../../../../Makefile), [scripts](../../../../scripts/), [stack](../../../../stack/) | [scripts/tests](../../../../scripts/tests/), `make validate-context` |
 | Runtime and image configuration | [Service chart inventory](../../../../README.md#stack-model), service-owned charts, [Compose image specification](../../../../docker-compose.yaml), Dockerfiles | `make validate-helm`, `make images-validate`, chart tests in [nv-ingest/tests](../../../../nv-ingest/tests/) |
 | URL/PDF ingestion and refresh | [url-ingest](../../../../url-ingest/): Rust crawler, Python workers, durable state, job renderers | [url-ingest/tests](../../../../url-ingest/tests/), Rust checks from its current Makefile/Dockerfile |
 | Retrieval compatibility | [nemotron-retriever](../../../../nemotron-retriever/): adapters, templates, chart values | [nemotron-retriever/tests](../../../../nemotron-retriever/tests/), `make -C nemotron-retriever test` |
@@ -33,8 +33,8 @@ unverified paths, so the handoff states what was actually examined.
 
 These are navigation aids, not a frozen inventory. Follow new owned components
 and configuration introduced since this guide was written. Read recipes before
-running them: `make validate-local` includes Docker builds and adjacent
-Hindsight validation; it is not a lightweight unit-test alias. Source tests can
+running them: `make validate-local` includes Docker builds and, when selected,
+adjacent Hindsight validation; it is not a lightweight unit-test alias. Source tests can
 use temporary files and mocked clients without loading `.env` or contacting
 live services. Exercise root orchestration with fake clients and render service-owned charts
 locally; do not deploy, crawl external sites, or ingest live data as part of a

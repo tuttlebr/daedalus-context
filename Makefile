@@ -21,6 +21,13 @@ ROLLOUT_TIMEOUT ?= 20m
 ENVIRONMENT ?= production
 GENERATED_AGENT_ENV ?= $(ROOT_DIR)/stack/generated/$(ENVIRONMENT)-daedalus-context.env
 COMPOSE_FILE := $(ROOT_DIR)/docker-compose.yaml
+# A clean clone can validate default image references without credentials. An
+# explicitly selected ENV_FILE must exist; Compose reports an error if missing.
+ifeq ($(ENV_FILE),$(ROOT_DIR)/.env)
+COMPOSE_ENV_FILE := $(if $(wildcard $(ENV_FILE)),$(ENV_FILE),/dev/null)
+else
+COMPOSE_ENV_FILE := $(ENV_FILE)
+endif
 
 # Every context aid and the Agent share one reviewed namespace. Component
 # aliases remain for the existing health/data scripts, but cannot diverge.
@@ -63,6 +70,15 @@ UNIFI_MCP_CHART ?= $(ROOT_DIR)/unifi-network-mcp/chart
 HINDSIGHT_ROOT ?= $(abspath $(ROOT_DIR)/../daedalus-hindsight)
 HINDSIGHT_CHART ?= $(HINDSIGHT_ROOT)/charts/daedalus-hindsight
 HINDSIGHT_RELEASE ?= hindsight
+# Optional site overlays. Root image/endpoint/operational --set arguments retain
+# precedence; use these files for node placement, resources, and chart settings.
+MILVUS_VALUES_FILE ?=
+NV_INGEST_VALUES_FILE ?=
+PDF_SERVER_VALUES_FILE ?=
+URL_INGEST_VALUES_FILE ?=
+UNIFI_MCP_VALUES_FILE ?=
+# A single argument expression keeps deployment and validation on the same file.
+chart_values = $(if $(strip $($(1)_VALUES_FILE)),--values "$($(1)_VALUES_FILE)")
 # Production-safe chart defaults are used unless the operator explicitly names
 # an override. NodePort examples are never auto-discovered.
 RETRIEVER_VALUES_FILE ?= nemotron-retriever/chart/values-daedalus.yaml
@@ -98,18 +114,12 @@ NV_INGEST_REPLICA_COUNT ?= 2
 # The prefixed alias is available for an explicit chart-only override.
 NV_INGEST_IMAGE_STORAGE_URI ?=
 EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI := $(or $(strip $(NV_INGEST_IMAGE_STORAGE_URI)),$(strip $(IMAGE_STORAGE_URI)))
-OCR_HTTP_ENDPOINT ?=
 OCR_INFER_PROTOCOL ?= http
 OCR_MODEL_NAME ?= scene_text_ensemble
-YOLOX_HTTP_ENDPOINT ?=
 YOLOX_INFER_PROTOCOL ?= http
-YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT ?=
 YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL ?= http
-YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT ?=
 YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL ?= http
-VLM_CAPTION_ENDPOINT ?=
 VLM_CAPTION_MODEL_NAME ?= nvidia/NVIDIA-Nemotron-Nano-12B-v2
-NEMOTRON_PARSE_HTTP_ENDPOINT ?=
 NEMOTRON_PARSE_INFER_PROTOCOL ?= http
 NEMOTRON_PARSE_MODEL_NAME ?= nvidia/nemotron-parse
 NV_INGEST_PARSER_IMAGE ?= daedalus.ddns.me:5050/btuttle/nemotron-parse:0.1.3
@@ -155,7 +165,7 @@ endif
 .PHONY: help doctor show-config require-context \
 	images-validate images-build images-push images-release-refs images-publish \
 	compose-config compose-build compose-push compose-release-refs compose-publish \
-	preflight validate validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy restart recovery-status recovery-status-workflow \
+	preflight validate validate-context validate-helm validate-local validate-cluster validate-ha render-agent-env deploy deploy-workflow update redeploy restart recovery-status recovery-status-workflow \
 	verify-shared-secrets migrate-legacy-secrets migrate-hindsight deploy-local-fast-storage deploy-nfs-locking patch-nfs-pv-locking enable-schedules enable-external-mcp cleanup-legacy \
 	healthcheck health-provider health-dependencies health-integration health-stack \
 	healthcheck-agent publish-corpus stage-data seed-data run-ingest \
@@ -235,9 +245,17 @@ doctor: ## [read-only cluster] Check tools, exported configuration, context, and
 	  command -v "$$command" >/dev/null || { echo "Missing required command: $$command" >&2; exit 1; }; \
 	done
 	@[[ -n "$(MAKE_VERSION)" ]] || { echo 'GNU Make is required.' >&2; exit 1; }
-	@[[ -n "$(K8S_MCP_IMAGE)" && -n "$(URL_INGEST_IMAGE)" ]] || { \
-	  echo 'Root .env values are not exported to Make. Run: set -a; source .env; set +a' >&2; exit 1; \
-	}
+	@for component in $(COMPONENTS); do \
+	  case "$$component" in \
+	    k8s-mcp) value="$(K8S_MCP_IMAGE)"; variable=K8S_MCP_IMAGE ;; \
+	    unifi-mcp) value="$(UNIFI_MCP_IMAGE)"; variable=UNIFI_MCP_IMAGE ;; \
+	    url-ingest) value="$(URL_INGEST_IMAGE)"; variable=URL_INGEST_IMAGE ;; \
+	    *) continue ;; \
+	  esac; \
+	  [[ -n "$$value" ]] || { \
+	    echo "$$variable is required for $$component. Export root .env: set -a; source .env; set +a" >&2; exit 1; \
+	  }; \
+	done
 	@$(MAKE) --no-print-directory require-context
 	@$(KUBECTL) cluster-info >/dev/null
 	@echo 'Doctor checks passed. Next: make validate-cluster'
@@ -283,25 +301,25 @@ show-config: ## [read-only] Print effective non-secret operational configuration
 images-validate: ## [read-only local] Validate all versioned image specifications.
 	@command -v docker >/dev/null || { echo 'Missing required command: docker' >&2; exit 1; }
 	@$(COMPOSE) version >/dev/null
-	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	@$(COMPOSE) --env-file "$(COMPOSE_ENV_FILE)" --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
 	  --profile ingest config --quiet
 	@source "$(ROOT_DIR)/scripts/image-reference.sh"; \
 	  while IFS= read -r image; do \
 	    require_semver_image_ref "Compose image" "$$image"; \
-	  done < <($(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	  done < <($(COMPOSE) --env-file "$(COMPOSE_ENV_FILE)" --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
 	    --profile ingest config --images)
 
 images-build: images-validate ## [local write] Build every locally maintained release image.
-	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	@$(COMPOSE) --env-file "$(COMPOSE_ENV_FILE)" --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
 	  --profile ingest build $(IMAGE_BUILD_SERVICES)
 
 images-push: images-build ## [registry write] Push every workspace release image.
-	@$(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	@$(COMPOSE) --env-file "$(COMPOSE_ENV_FILE)" --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
 	  --profile ingest push $(IMAGE_BUILD_SERVICES)
 
 images-release-refs: images-validate ## [read-only local] Print Kubernetes image environment assignments.
 	@command -v "$(JQ)" >/dev/null || { echo 'Missing required command: $(JQ)' >&2; exit 1; }
-	@config="$$($(COMPOSE) --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
+	@config="$$($(COMPOSE) --env-file "$(COMPOSE_ENV_FILE)" --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" \
 	  --profile ingest config --format json)"; \
 	resolve_image() { \
 	  variable="$$1"; \
@@ -342,9 +360,9 @@ require-context:
 preflight: ## [read-only cluster] Verify the guarded context and cluster access.
 	@$(KUBECTL) cluster-info >/dev/null
 
-verify-shared-secrets: preflight ## [read-only cluster] Verify externally managed Secrets required by all charts.
+verify-shared-secrets: preflight ## [read-only cluster] Verify externally managed Secrets for selected components.
 	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" \
-	  bash "$(ROOT_DIR)/scripts/check-shared-secrets.sh"
+	  bash "$(ROOT_DIR)/scripts/check-shared-secrets.sh" $(COMPONENTS)
 
 migrate-legacy-secrets: preflight ## [cluster write] Copy legacy provider Secrets into daedalus without exposing values.
 	@DAEDALUS_NAMESPACE="$(DAEDALUS_NAMESPACE)" KUBECTL="$(KUBECTL)" JQ="$(JQ)" \
@@ -511,7 +529,7 @@ deploy-retriever:
 
 deploy-milvus:
 	@[[ -n "$(MINIO_STORAGE_CLASS)" ]] || { echo 'MINIO_STORAGE_CLASS is required.' >&2; exit 1; }
-	@$(HELM) upgrade --install "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" \
+	@$(HELM) upgrade --install "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" $(call chart_values,MILVUS) \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	  --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" \
 	  --set-string milvus.minio.persistence.storageClass="$(MINIO_STORAGE_CLASS)" \
@@ -523,7 +541,7 @@ deploy-nv-ingest:
 	@[[ -n "$(EFFECTIVE_NV_INGEST_IMAGE_STORAGE_URI)" ]] || { \
 	  echo 'IMAGE_STORAGE_URI is required for NV-Ingest.' >&2; exit 1; \
 	}
-	@$(HELM) upgrade --install "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" \
+	@$(HELM) upgrade --install "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" $(call chart_values,NV_INGEST) \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	  --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" \
 	  --set-string nv-ingest.image.tag="$(NV_INGEST_VERSION)" \
@@ -556,7 +574,7 @@ deploy-nv-ingest:
 
 deploy-pdf-server:
 	@image='$(PDF_SERVER_IMAGE)'; repository="$${image%:*}"; tag="$${image##*:}"; \
-	  $(HELM) upgrade --install pdf-server "$(PDF_SERVER_CHART)" \
+	  $(HELM) upgrade --install pdf-server "$(PDF_SERVER_CHART)" $(call chart_values,PDF_SERVER) \
 	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
 	    --set-string persistence.storageClass="$(PDF_STORAGE_CLASS)" \
@@ -566,7 +584,7 @@ deploy-pdf-server:
 deploy-url-ingest:
 	@python3 "$(ROOT_DIR)/scripts/render_refresh_contract.py" --output "$(URL_INGEST_CHART)/files/refresh-contract.json"
 	@cp "$(ROOT_DIR)/url-ingest/refresh_monitor.py" "$(URL_INGEST_CHART)/files/refresh_monitor.py"
-	@$(HELM) upgrade --install url-ingest "$(URL_INGEST_CHART)" \
+	@$(HELM) upgrade --install url-ingest "$(URL_INGEST_CHART)" $(call chart_values,URL_INGEST) \
 	  --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	  --set-string images.crawler="$(URL_INGEST_IMAGE)" \
 	  --set-string images.runner="$(URL_INGEST_RUNNER_IMAGE)" \
@@ -622,7 +640,7 @@ deploy-unifi-mcp:
 	  else \
 	    helm_args+=(--atomic --wait); \
 	  fi; \
-	  $(HELM) upgrade --install unifi-network-mcp-server "$(UNIFI_MCP_CHART)" \
+	  $(HELM) upgrade --install unifi-network-mcp-server "$(UNIFI_MCP_CHART)" $(call chart_values,UNIFI_MCP) \
 	    --namespace "$(DAEDALUS_NAMESPACE)" --create-namespace \
 	    --set-string image.repository="$$repository" --set-string image.tag="$$tag" \
 	    --set-string controller.baseUrl="$(UNIFI_BASE_URL)" \
@@ -1019,7 +1037,15 @@ run-ingest: refresh-run ## [cluster/data write] Alias for refresh-run; submit Jo
 
 validate: validate-local validate-cluster ## [read-only cluster] Run local checks and cluster dry-runs.
 
-validate-helm: ## [read-only local] Validate topology contracts and all eight Helm releases.
+validate-helm: validate-context ## [read-only local] Validate context charts and the selected Hindsight integration.
+	@if [[ " $(COMPONENTS) " == *" hindsight "* ]]; then \
+	  [[ -f "$(HINDSIGHT_CHART)/Chart.yaml" ]] || { \
+	    echo 'Hindsight is selected but its adjacent chart is missing. Set HINDSIGHT_ROOT or use make validate-context for this repository alone.' >&2; exit 1; \
+	  }; \
+	  $(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null; \
+	fi
+
+validate-context: ## [read-only local] Validate this repository's contracts, Python contract tests, and seven charts; no adjacent checkout required.
 	@command -v python3 >/dev/null
 	@command -v "$(HELM)" >/dev/null
 	@"$(ROOT_DIR)/scripts/contextctl" validate --environment "$(ENVIRONMENT)"
@@ -1031,28 +1057,32 @@ validate-helm: ## [read-only local] Validate topology contracts and all eight He
 	  -s "$(ROOT_DIR)/nemotron-retriever/tests" >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 	  -s "$(ROOT_DIR)/url-ingest/tests" -p 'test_refresh*.py' >/dev/null
-	@$(MAKE) --no-print-directory -C "$(HINDSIGHT_ROOT)" validate >/dev/null
-	@for chart in "$(MILVUS_CHART)" "$(RETRIEVER_CHART)" "$(NV_INGEST_CHART)" \
-	  "$(PDF_SERVER_CHART)" "$(URL_INGEST_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
-	  $(HELM) lint "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null; \
-	done
+	@$(HELM) lint "$(MILVUS_CHART)" $(call chart_values,MILVUS) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(RETRIEVER_CHART)" $(call chart_values,RETRIEVER) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(NV_INGEST_CHART)" $(call chart_values,NV_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(PDF_SERVER_CHART)" $(call chart_values,PDF_SERVER) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(URL_INGEST_CHART)" $(call chart_values,URL_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(K8S_MCP_CHART)" $(call chart_values,K8S_MCP) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
+	@$(HELM) lint "$(UNIFI_MCP_CHART)" $(call chart_values,UNIFI_MCP) --namespace "$(DAEDALUS_NAMESPACE)" --strict >/dev/null
 	@rendered="$$(mktemp)"; trap 'rm -f "$$rendered"' EXIT; \
-	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" >>"$$rendered"; \
+	  $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" $(call chart_values,MILVUS) --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" >>"$$rendered"; \
+	  retriever_values=(); \
+	  if [[ -n "$(RETRIEVER_VALUES_FILE)" ]]; then retriever_values+=(--values "$(RETRIEVER_VALUES_FILE)"); fi; \
 	  $(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
-	    --values "$(RETRIEVER_VALUES_FILE)" >>"$$rendered"; \
-	  $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	    "$${retriever_values[@]}" >>"$$rendered"; \
+	  $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" $(call chart_values,NV_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" \
 	    --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" >>"$$rendered"; \
-	  for chart in "$(PDF_SERVER_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
-	    $(HELM) template "$$(basename "$$chart")" "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
-	  done; \
-	  $(HELM) template url-ingest "$(URL_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
+	  $(HELM) template pdf-server "$(PDF_SERVER_CHART)" $(call chart_values,PDF_SERVER) --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  $(HELM) template k8s-mcp-server "$(K8S_MCP_CHART)" $(call chart_values,K8S_MCP) --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  $(HELM) template unifi-network-mcp-server "$(UNIFI_MCP_CHART)" $(call chart_values,UNIFI_MCP) --namespace "$(DAEDALUS_NAMESPACE)" >>"$$rendered"; \
+	  $(HELM) template url-ingest "$(URL_INGEST_CHART)" $(call chart_values,URL_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" \
 	    --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
 	    --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" >>"$$rendered"; \
 	  ! grep -Eq 'namespace: (milvus|nv-ingest|daedalus-retriever|k8s-mcp-server|unifi-network-mcp-server)$$' "$$rendered"
 	@bash -n "$(ROOT_DIR)/scripts/check-shared-secrets.sh" \
 	  "$(ROOT_DIR)/scripts/migrate-legacy-secrets.sh" \
 	  "$(ROOT_DIR)/scripts/cleanup-legacy-stack.sh"
-	@echo "Helm validation passed."
+	@echo "Context chart and contract validation passed."
 
 validate-local: validate-helm ## [read-only local] Run full source, image, and chart validation.
 	@$(MAKE) --no-print-directory images-validate
@@ -1092,25 +1122,24 @@ validate-ha: ## [read-only local] Require an approved numeric HA acceptance poli
 render-agent-env: ## [read-only local] Print generated Daedalus provider endpoints.
 	@"$(ROOT_DIR)/scripts/contextctl" render-agent-env --environment "$(ENVIRONMENT)"
 
-validate-cluster: preflight validate-helm ## [read-only cluster] Validate Helm manifests with Kubernetes client dry-runs.
-	@KUBECTL="$(KUBECTL)" PYTHONDONTWRITEBYTECODE=1 \
-	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py"
-	@$(HELM) template "$(HINDSIGHT_RELEASE)" "$(HINDSIGHT_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" | \
-	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@$(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" | \
-	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@$(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
-	  --namespace "$(DAEDALUS_NAMESPACE)" --values "$(RETRIEVER_VALUES_FILE)" | \
-	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@$(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
-	  --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" | \
-	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@for chart in "$(PDF_SERVER_CHART)" "$(K8S_MCP_CHART)" "$(UNIFI_MCP_CHART)"; do \
-	  $(HELM) template "$$(basename "$$chart")" "$$chart" --namespace "$(DAEDALUS_NAMESPACE)" | \
-	    $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null; \
+validate-cluster: preflight validate-helm ## [read-only cluster] Validate selected chart manifests and capacity with client dry-runs.
+	@KUBECTL="$(KUBECTL)" MILVUS_VALUES_FILE="$(MILVUS_VALUES_FILE)" \
+	  RETRIEVER_VALUES_FILE="$(RETRIEVER_VALUES_FILE)" PYTHONDONTWRITEBYTECODE=1 \
+	  python3 "$(ROOT_DIR)/scripts/check_cluster_capacity.py" --components $(COMPONENTS)
+	@for component in $(COMPONENTS); do \
+	  case "$$component" in \
+	    hindsight) $(HELM) template "$(HINDSIGHT_RELEASE)" "$(HINDSIGHT_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" ;; \
+	    milvus) $(HELM) template "$(MILVUS_RELEASE)" "$(MILVUS_CHART)" $(call chart_values,MILVUS) --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nim-milvus-ms/chart/post-render.py" ;; \
+	    retriever) values_args=(); \
+	      if [[ -n "$(RETRIEVER_VALUES_FILE)" ]]; then values_args+=(--values "$(RETRIEVER_VALUES_FILE)"); fi; \
+	      $(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" "$${values_args[@]}" ;; \
+	    nv-ingest) $(HELM) template "$(NV_INGEST_RELEASE)" "$(NV_INGEST_CHART)" $(call chart_values,NV_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" --post-renderer "$(ROOT_DIR)/nv-ingest/helm-post-renderer.sh" ;; \
+	    pdf-server) $(HELM) template pdf-server "$(PDF_SERVER_CHART)" $(call chart_values,PDF_SERVER) --namespace "$(DAEDALUS_NAMESPACE)" ;; \
+	    k8s-mcp) $(HELM) template k8s-mcp-server "$(K8S_MCP_CHART)" $(call chart_values,K8S_MCP) --namespace "$(DAEDALUS_NAMESPACE)" ;; \
+	    unifi-mcp) $(HELM) template unifi-network-mcp-server "$(UNIFI_MCP_CHART)" $(call chart_values,UNIFI_MCP) --namespace "$(DAEDALUS_NAMESPACE)" ;; \
+	    url-ingest) $(HELM) template url-ingest "$(URL_INGEST_CHART)" $(call chart_values,URL_INGEST) --namespace "$(DAEDALUS_NAMESPACE)" \
+	      --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
+	      --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" ;; \
+	  esac | $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null; \
 	done
-	@$(HELM) template url-ingest "$(URL_INGEST_CHART)" --namespace "$(DAEDALUS_NAMESPACE)" \
-	  --set-file urlLists.kubernetes="$(ROOT_DIR)/url-ingest/files/k8s_url_links.txt" \
-	  --set-file urlLists.vetpartner="$(ROOT_DIR)/url-ingest/files/vetpartner_url_links.txt" | \
-	  $(KUBECTL) --namespace="$(DAEDALUS_NAMESPACE)" apply --dry-run=client -f - >/dev/null
-	@echo "Validation passed."
+	@echo "Selected chart validation passed."

@@ -40,12 +40,12 @@ OpenCode uses writable ephemeral config, state, data, and cache volumes with a
 read-only container filesystem. An init container copies the image's bundled
 configuration and skills into the config volume before startup.
 
-After the [root configuration setup](../../README.md#configuration), deploy
+After the [root configuration setup](../../docs/deployment.md#configuration), deploy
 with root `make deploy COMPONENTS=k8s-mcp`. The base Service is ClusterIP.
 External access uses the configured fixed NodePort on a LoadBalancer Service
 with an unclaimed class; no separate ingress address is expected.
 
-Use the [external MCP workflow](../../README.md#external-mcp-network-prerequisite)
+Use the [external MCP workflow](../../docs/deployment.md#external-mcp-network-prerequisite)
 for Cilium source-range enforcement and rollout checks. Preserve the established
 port and full client CIDR on updates. Verify the authenticated API from a
 non-node LAN client; Service-field checks alone do not establish compatibility.

@@ -12,7 +12,9 @@ targets. Kubernetes is the only runtime deployment path;
 
 ## Ground the Task
 
-1. Read the relevant sections of [README.md](../../../README.md) and run
+1. Read the relevant sections of [README.md](../../../README.md), the
+   [deployment guide](../../../docs/deployment.md), or
+   [operations guide](../../../docs/operations.md), and run
    `make help` from the repository root. Check the current
    [Makefile](../../../Makefile) for command arguments and side effects.
 2. Inspect `git status --short`. Preserve unrelated and component-local work.
@@ -56,6 +58,10 @@ remaining findings and validation limits explicitly.
 
 ## Select the Root Workflow
 
+- Use `make validate-context` for this repository's contracts and seven charts
+  without credentials or adjacent checkouts. `make validate-helm` also validates
+  Hindsight when selected. See [Contributing](../../../CONTRIBUTING.md) for
+  tool setup and the full source gate.
 - Validate or publish local images with `make images-validate`,
   `make images-build`, `make images-release-refs`, or `make images-publish`.
 - Prepare a cluster operation with `make doctor`, `make show-config`, and
@@ -85,7 +91,10 @@ remaining findings and validation limits explicitly.
   verify extracted content through the actual consumer path, beyond readiness.
 
 Use `COMPONENTS` to limit scope. Include selected dependencies or prove that
-existing dependencies are healthy before operating on a dependent alone.
+existing dependencies are healthy before operating on a dependent alone. Pass
+ad hoc selections as Make command-line assignments so loading `.env` cannot
+replace them. Local context checks still cover all owned charts; cluster renders,
+default Secret existence checks, and capacity checks honor the selection.
 
 ## Enforce Safety Boundaries
 
@@ -103,6 +112,10 @@ existing dependencies are healthy before operating on a dependent alone.
   Makefile for deployment; component `make render` and `make validate-chart`
   inspect the same chart locally through `scripts/service-chart.mk`. Do not
   introduce parallel installers or standalone copies of chart resources.
+- The reference values are specific to Daedalus hardware and networking.
+  `ENVIRONMENT=development` changes acceptance policy, not placement or storage.
+  Use the documented per-component `*_VALUES_FILE` inputs for another site;
+  explicit root `--set` values retain precedence. Preserve existing defaults.
 - Keep image build and registry publication separate from Kubernetes
   reconciliation.
 - Never delete PVCs, reset etcd, drop collections, or rerun ingestion merely to
@@ -119,9 +132,11 @@ For executable source changes, run the relevant component tests and
 `make validate-local`. For cluster-facing changes, also run
 `make validate-cluster` with the approved context when cluster access is in
 scope; otherwise report that gate as pending and complete local validation.
-For documentation or skill edits alone, validate the changed links, command
-references, and skill metadata; building images or accessing the cluster is
-unnecessary.
+For documentation or skill edits alone, run
+`python3 .github/scripts/check_docs.py`, check command references and skill
+metadata; building images or accessing the cluster is unnecessary. Cluster
+client dry-runs do not reproduce every deploy override or establish runtime
+acceptance; report separately any pending GPU, data, and consumer checks.
 
 When a live operation is authorized, verify:
 

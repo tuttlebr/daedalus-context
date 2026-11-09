@@ -21,21 +21,21 @@ fmt-check:
 		(echo "Files not formatted:"; gofmt -l .; exit 1)
 
 lint:
-	@command -v golangci-lint >/dev/null 2>&1 && \
-		(cd $(SRC_DIR) && golangci-lint run) || \
-		echo "golangci-lint not installed, skipping"
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		cd $(SRC_DIR) && golangci-lint run; \
+	else \
+		echo "golangci-lint not installed, skipping"; \
+	fi
 
 check: fmt-check vet test build
 
 validate: check validate-chart
 
 docker:
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  build k8s-mcp-server-read-only
+	$(MAKE) -C .. images-build IMAGE_BUILD_SERVICES=k8s-mcp-server-read-only
 
-docker-push: docker
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  push k8s-mcp-server-read-only
+docker-push:
+	$(MAKE) -C .. images-push IMAGE_BUILD_SERVICES=k8s-mcp-server-read-only
 
 clean:
 	rm -f $(SRC_DIR)/$(BINARY)

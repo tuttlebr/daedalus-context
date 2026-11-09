@@ -21,17 +21,17 @@ func TestHighVolumeToolsExposeCompactDefaults(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.tool.Name, func(t *testing.T) {
-			requireBoundedLogProperty(t, test.tool, test.propertyName, test.defaultValue, test.maximum)
+			requireBoundedLogProperty(t, &test.tool, test.propertyName, test.defaultValue, test.maximum)
 		})
 	}
 
-	includeDetails := ListResourcesTool().InputSchema.Properties["includeDetails"].(map[string]interface{})
-	if includeDetails["default"] != false {
+	includeDetails, ok := ListResourcesTool().InputSchema.Properties["includeDetails"].(map[string]interface{})
+	if !ok || includeDetails["default"] != false {
 		t.Fatalf("listResources.includeDetails default = %v, want false", includeDetails["default"])
 	}
 
-	includeNamespaceDetails := GetClusterSummaryTool().InputSchema.Properties["includeNamespaceDetails"].(map[string]interface{})
-	if includeNamespaceDetails["default"] != false {
+	includeNamespaceDetails, ok := GetClusterSummaryTool().InputSchema.Properties["includeNamespaceDetails"].(map[string]interface{})
+	if !ok || includeNamespaceDetails["default"] != false {
 		t.Fatalf("getClusterSummary.includeNamespaceDetails default = %v, want false", includeNamespaceDetails["default"])
 	}
 }

@@ -3,7 +3,7 @@
 This chart owns the read-only HTTP service and retained corpus PVC.
 [values.yaml](values.yaml) defines image, storage, service, and placement.
 
-After the [root configuration setup](../../README.md#configuration), use root
+After the [root configuration setup](../../docs/deployment.md#configuration), use root
 `make deploy COMPONENTS=pdf-server`. Publishing a corpus is a separate
 `make publish-corpus CORPUS_GENERATION=<source-revision-or-digest>` data operation.
 

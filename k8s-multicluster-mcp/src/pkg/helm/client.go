@@ -169,6 +169,7 @@ type InstallOptions struct {
 	EnableDNS bool
 }
 
+//nolint:gocritic // Retain the public client API with independent per-call option values.
 func (c *Client) InstallChart(ctx context.Context, namespace, releaseName, chartName string, opts InstallOptions, values map[string]interface{}) (*release.Release, error) {
 	actionConfig, err := c.initActionConfig(namespace)
 	if err != nil {
@@ -332,6 +333,7 @@ type UpgradeOptions struct {
 	MaxHistory int
 }
 
+//nolint:gocritic // Retain the public client API with independent per-call option values.
 func (c *Client) UpgradeChart(ctx context.Context, namespace, releaseName, chartName string, opts UpgradeOptions, values map[string]interface{}) (*release.Release, error) {
 	actionConfig, err := c.initActionConfig(namespace)
 	if err != nil {

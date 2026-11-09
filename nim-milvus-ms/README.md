@@ -1,13 +1,15 @@
-# Milvus Component Tools
+# Milvus and Object Storage
 
 The active Daedalus Milvus deployment is [Milvus chart](chart/README.md),
 operated by the [root Makefile](../Makefile) in the shared `daedalus` namespace.
 This directory owns `chart/`, local rendering commands, and explicit storage
-and recovery utilities.
+and recovery utilities. Milvus stores retrieval vectors and metadata; its MinIO
+service stores segments and the document artifacts shared with NV-Ingest and
+Daedalus. The directory name is retained for existing paths and tooling.
 
 ## Normal operations
 
-Follow the [root configuration setup](../README.md#configuration), then run
+Follow the [root configuration setup](../docs/deployment.md#configuration), then run
 from the repository root:
 
 ```bash
@@ -20,13 +22,19 @@ make health-integration COMPONENTS=milvus
 The [active chart values](chart/values.yaml) and
 [component lock](../stack/components.lock.yaml) own versions and topology.
 The root recipe supplies storage classes and the active MinIO post-renderer.
-Use [root recovery](../README.md#recovery) for restarts with existing storage.
+Review node affinity, storage provisioning, and resource requests in the chart
+before deploying outside the reference cluster. The bundled provisioning values
+describe that cluster's nodes and storage paths.
+Use [root recovery](../docs/operations.md#recovery) for restarts with existing storage.
 
 ## Component tools
 
 | File | Purpose |
 | --- | --- |
 | [deploy-local-storage.sh](deploy-local-storage.sh) | Cluster storage provisioning utility |
+| [deploy-local-fast-storage.sh](deploy-local-fast-storage.sh) | Provision the node-local cache class through root `make deploy-local-fast-storage` |
+| [deploy-nfs-locking.sh](deploy-nfs-locking.sh) | Configure future NFS mounts through root `make deploy-nfs-locking` |
+| [patch-unas-pv-locking.sh](patch-unas-pv-locking.sh) | Update existing PV mount options through root `make patch-nfs-pv-locking` |
 | [deploy-monitoring.sh](deploy-monitoring.sh) | Reconciles the separate monitoring release |
 | [destroy.sh](destroy.sh) | Confirmed release uninstall; PVC deletion requires an additional confirmation |
 | [reset-etcd.sh](reset-etcd.sh) | Confirmed destructive metadata reset |

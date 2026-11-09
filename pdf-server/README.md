@@ -2,12 +2,12 @@
 
 The [PDF chart](chart/README.md) owns the HTTP service and retained
 corpus PVC in the shared `daedalus` namespace. This component supplies the image
-and publication tooling. URL refresh consumes the `pdf-server-data` claim
+and publication tooling for the Daedalus Context monorepo. URL refresh consumes the `pdf-server-data` claim
 read-only and does not reconcile PDF resources.
 
 ## Deploy and publish
 
-Use the [root configuration setup](../README.md#configuration), then run from
+Use the [root configuration setup](../docs/deployment.md#configuration), then run from
 the repository root:
 
 ```bash
@@ -36,7 +36,24 @@ concurrent writers; a monotonic fencing token rejects an older delayed Job.
 Existing physical collection directories cannot be overwritten by publication.
 
 Source paths and the node holding them are configured through
-`PDF_SOURCE_HOST_PATH` and `PDF_SOURCE_NODE`. Do not copy files directly into
+`PDF_SOURCE_HOST_PATH` and `PDF_SOURCE_NODE` in the root `.env`. The path must
+exist on that Kubernetes node; the repository does not include a PDF corpus.
+The publisher reads direct, non-hidden `*.pdf` files from these collection
+subdirectories:
+
+```text
+<PDF_SOURCE_HOST_PATH>/
+  nvidia/
+  kubernetes/
+  semianalysis/
+  mentalhealth/
+```
+
+Include the PDF collections you intend to refresh. A missing directory is
+skipped during publication; a present directory with no matching PDFs fails
+publication. At least one PDF must be copied. Nested directories, uppercase
+extensions, and `vetpartner` (a URL-only collection) are not publication inputs.
+Do not copy files directly into
 the active PVC. Publication selects the corpus; refresh Jobs separately update
 retrieval data and return from submission before ingestion completes.
 

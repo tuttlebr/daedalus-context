@@ -7,7 +7,7 @@ import (
 	"github.com/tuttlebr/kubernetes-mcp-server/pkg/k8s"
 )
 
-func requireBoundedLogProperty(t *testing.T, tool mcp.Tool, propertyName string, defaultValue int, maximum int) {
+func requireBoundedLogProperty(t *testing.T, tool *mcp.Tool, propertyName string, defaultValue int, maximum int) {
 	t.Helper()
 	property, ok := tool.InputSchema.Properties[propertyName].(map[string]interface{})
 	if !ok {
@@ -37,8 +37,8 @@ func TestLogToolsExposeBoundedTimeWindows(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.tool.Name, func(t *testing.T) {
-			requireBoundedLogProperty(t, test.tool, "sinceSeconds", k8s.DefaultLogSinceSeconds, k8s.MaxLogSinceSeconds)
-			requireBoundedLogProperty(t, test.tool, test.lineArg, test.defaultLine, k8s.MaxLogTailLines)
+			requireBoundedLogProperty(t, &test.tool, "sinceSeconds", k8s.DefaultLogSinceSeconds, k8s.MaxLogSinceSeconds)
+			requireBoundedLogProperty(t, &test.tool, test.lineArg, test.defaultLine, k8s.MaxLogTailLines)
 		})
 	}
 }

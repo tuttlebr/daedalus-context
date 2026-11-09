@@ -22,3 +22,9 @@ repos:
         entry: bash -c 'for script do bash -n "$script" || exit; done' --
         language: system
         types: [shell]
+      - id: local-markdown-links
+        name: local Markdown links and section anchors
+        entry: python3 .github/scripts/check_docs.py
+        language: system
+        types: [markdown]
+        pass_filenames: false

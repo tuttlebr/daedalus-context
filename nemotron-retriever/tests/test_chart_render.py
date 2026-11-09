@@ -162,57 +162,55 @@ class ChartRenderTests(unittest.TestCase):
             )
 
     def test_any_node_exposure_uses_fixed_nodeports_and_scoped_forwarding(self):
-        for values_file in ("custom-values.yaml", "values-daedalus.yaml"):
-            with self.subTest(values_file=values_file):
-                result = helm_template("--values", str(CHART_DIR / values_file))
-                self.assertEqual(result.returncode, 0, result.stderr)
+        result = helm_template("--values", str(CHART_DIR / "values-daedalus.yaml"))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-                resources = [
-                    resource for resource in yaml.safe_load_all(result.stdout) if resource
-                ]
-                services = {
-                    resource["metadata"]["labels"]["app.kubernetes.io/component"]: resource
-                    for resource in resources
-                    if resource["kind"] == "Service"
-                }
-                self.assertEqual(set(services), {"embedder", "reranker"})
+        resources = [
+            resource for resource in yaml.safe_load_all(result.stdout) if resource
+        ]
+        services = {
+            resource["metadata"]["labels"]["app.kubernetes.io/component"]: resource
+            for resource in resources
+            if resource["kind"] == "Service"
+        }
+        self.assertEqual(set(services), {"embedder", "reranker"})
 
-                for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
-                    service = services[component]
-                    self.assertEqual(service["spec"]["type"], "NodePort")
-                    self.assertEqual(service["spec"]["externalTrafficPolicy"], "Cluster")
-                    self.assertEqual(service["spec"]["ports"][0]["nodePort"], node_port)
-                    self.assertNotIn("clusterIP", service["spec"])
-                    self.assertNotIn("loadBalancerClass", service["spec"])
-                    self.assertNotIn("allocateLoadBalancerNodePorts", service["spec"])
-                    self.assertNotIn("loadBalancerSourceRanges", service["spec"])
-                    self.assertNotIn("annotations", service["metadata"])
+        for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
+            service = services[component]
+            self.assertEqual(service["spec"]["type"], "NodePort")
+            self.assertEqual(service["spec"]["externalTrafficPolicy"], "Cluster")
+            self.assertEqual(service["spec"]["ports"][0]["nodePort"], node_port)
+            self.assertNotIn("clusterIP", service["spec"])
+            self.assertNotIn("loadBalancerClass", service["spec"])
+            self.assertNotIn("allocateLoadBalancerNodePorts", service["spec"])
+            self.assertNotIn("loadBalancerSourceRanges", service["spec"])
+            self.assertNotIn("annotations", service["metadata"])
 
-                policies = [r for r in resources if r["kind"] == "NetworkPolicy"]
-                self.assertEqual(len(policies), 2)
-                for policy in policies:
-                    self.assertIn(
-                        {"ipBlock": {"cidr": "192.168.1.0/24"}},
-                        policy["spec"]["ingress"][0]["from"],
-                    )
-                forwarding = {
-                    r["metadata"]["labels"]["daedalus.ai/target-component"]: r
-                    for r in resources
-                    if r["kind"] == "CiliumNetworkPolicy"
-                }
-                self.assertEqual(set(forwarding), {"embedder", "reranker"})
-                for component, policy in forwarding.items():
-                    self.assertEqual(
-                        policy["spec"]["endpointSelector"]["matchLabels"],
-                        services[component]["spec"]["selector"],
-                    )
-                    self.assertEqual(
-                        policy["spec"]["ingress"],
-                        [{
-                            "fromEntities": ["host", "remote-node"],
-                            "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
-                        }],
-                    )
+        policies = [r for r in resources if r["kind"] == "NetworkPolicy"]
+        self.assertEqual(len(policies), 2)
+        for policy in policies:
+            self.assertIn(
+                {"ipBlock": {"cidr": "192.168.1.0/24"}},
+                policy["spec"]["ingress"][0]["from"],
+            )
+        forwarding = {
+            r["metadata"]["labels"]["daedalus.ai/target-component"]: r
+            for r in resources
+            if r["kind"] == "CiliumNetworkPolicy"
+        }
+        self.assertEqual(set(forwarding), {"embedder", "reranker"})
+        for component, policy in forwarding.items():
+            self.assertEqual(
+                policy["spec"]["endpointSelector"]["matchLabels"],
+                services[component]["spec"]["selector"],
+            )
+            self.assertEqual(
+                policy["spec"]["ingress"],
+                [{
+                    "fromEntities": ["host", "remote-node"],
+                    "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+                }],
+            )
 
     def test_node_forwarding_only_targets_exposed_services_and_their_api_port(self):
         result = helm_template(

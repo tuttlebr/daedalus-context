@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -34,96 +35,139 @@ def gpu_request(container: dict) -> int:
     return int(value)
 
 
-nodes = kubectl_json("get", "nodes")["items"]
-ready_nodes = {
-    node["metadata"]["name"]: int(
-        node.get("status", {}).get("allocatable", {}).get("nvidia.com/gpu", 0)
-    )
-    for node in nodes
-    if not node.get("spec", {}).get("unschedulable", False)
-    and any(
-        condition.get("type") == "Ready" and condition.get("status") == "True"
-        for condition in node.get("status", {}).get("conditions", [])
-    )
-}
+def chart_values(component: str, override_variable: str) -> dict:
+    values = yaml.safe_load((ROOT / component / "chart/values.yaml").read_text(encoding="utf-8"))
+    override_path = os.environ.get(override_variable)
+    if override_path:
+        overrides = yaml.safe_load(Path(override_path).read_text(encoding="utf-8")) or {}
+        merge_values(values, overrides)
+    return values
 
-milvus = yaml.safe_load(
-    (ROOT / "nim-milvus-ms/chart/values.yaml").read_text(encoding="utf-8")
-)["milvus"]
-required_general_domains = max(
-    milvus[role]["replicas"]
-    for role in ("proxy", "queryNode", "dataNode", "streamingNode", "mixCoordinator")
-)
-if len(ready_nodes) < required_general_domains:
-    raise SystemExit(
-        f"hard Milvus placement needs {required_general_domains} Ready schedulable nodes; "
-        f"found {len(ready_nodes)}"
-    )
 
-retriever = yaml.safe_load(
-    (ROOT / "nemotron-retriever" / "chart" / "values.yaml").read_text(encoding="utf-8")
-)
-topology = yaml.safe_load(
-    (ROOT / "stack" / "topology.yaml").read_text(encoding="utf-8")
-)
-retriever_namespace = topology["releases"]["retriever"]["namespace"]
-embedder_replicas = retriever["embedder"]["replicaCount"]
-gpu_nodes = {name for name, count in ready_nodes.items() if count > 0}
-if len(gpu_nodes) < embedder_replicas:
-    raise SystemExit(
-        f"embedder hard spread needs {embedder_replicas} GPU nodes; found {len(gpu_nodes)}"
-    )
+def merge_values(values: dict, overrides: dict) -> None:
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(values.get(key), dict):
+            merge_values(values[key], value)
+        else:
+            values[key] = value
 
-pods = kubectl_json("get", "pods", "--all-namespaces")["items"]
-used_by_node = {name: 0 for name in ready_nodes}
-live_embedder_nodes: set[str] = set()
-live_embedders = 0
-for pod in pods:
-    if pod.get("status", {}).get("phase") in {"Succeeded", "Failed"}:
-        continue
-    node = pod.get("spec", {}).get("nodeName")
-    if node not in used_by_node:
-        continue
-    containers = pod.get("spec", {}).get("containers", [])
-    init_containers = pod.get("spec", {}).get("initContainers", [])
-    requested = max(
-        sum(gpu_request(container) for container in containers),
-        max((gpu_request(container) for container in init_containers), default=0),
-    )
-    used_by_node[node] += requested
-    labels = pod.get("metadata", {}).get("labels", {})
-    if (
-        pod.get("metadata", {}).get("namespace") == retriever_namespace
-        and labels.get("app.kubernetes.io/component") == "embedder"
-    ):
-        live_embedders += 1
-        live_embedder_nodes.add(node)
 
-additional_embedders = max(0, embedder_replicas - live_embedders)
-free_by_node = {
-    name: ready_nodes[name] - used_by_node[name]
-    for name in gpu_nodes
-}
-eligible_new_nodes = [
-    name
-    for name, free in free_by_node.items()
-    if free > 0 and name not in live_embedder_nodes
-]
-if len(eligible_new_nodes) < additional_embedders:
-    raise SystemExit(
-        f"embedder rollout needs {additional_embedders} additional distinct GPU nodes; "
-        f"eligible={eligible_new_nodes or 'none'}"
-    )
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--components", nargs="+", default=["milvus", "retriever"])
+    components = set(parser.parse_args().components)
+    if not components.intersection({"milvus", "retriever"}):
+        print(json.dumps({"checked": [], "detail": "No Milvus or retriever capacity checks selected"}))
+        return 0
+    nodes = kubectl_json("get", "nodes")["items"]
+    ready_nodes = {
+        node["metadata"]["name"]: int(
+            node.get("status", {}).get("allocatable", {}).get("nvidia.com/gpu", 0)
+        )
+        for node in nodes
+        if not node.get("spec", {}).get("unschedulable", False)
+        and any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in node.get("status", {}).get("conditions", [])
+        )
+    }
 
-print(
-    json.dumps(
-        {
+    if not ready_nodes:
+        raise SystemExit("no Ready schedulable nodes available")
+
+    if "milvus" in components:
+        milvus = chart_values("nim-milvus-ms", "MILVUS_VALUES_FILE")["milvus"]
+        required_general_domains = max(
+            milvus[role]["replicas"]
+            for role in ("proxy", "queryNode", "dataNode", "streamingNode", "mixCoordinator")
+        )
+        if len(ready_nodes) < required_general_domains:
+            raise SystemExit(
+                f"hard Milvus placement needs {required_general_domains} Ready schedulable nodes; "
+                f"found {len(ready_nodes)}"
+            )
+    if "retriever" not in components:
+        print(json.dumps({"readyNodes": len(ready_nodes), "checked": ["milvus"]}))
+        return 0
+
+    retriever = chart_values("nemotron-retriever", "RETRIEVER_VALUES_FILE")
+    # KAI memory sharing does not reserve nvidia.com/gpu per pod. Kubernetes device
+    # counts cannot establish available memory or shared placement for this mode.
+    if retriever["embedder"].get("gpuSharing", {}).get("enabled"):
+        print(json.dumps({
             "readyNodes": len(ready_nodes),
-            "gpuNodes": len(gpu_nodes),
-            "liveEmbedders": live_embedders,
-            "targetEmbedders": embedder_replicas,
-            "eligibleNewEmbedderNodes": eligible_new_nodes,
-        },
-        sort_keys=True,
+            "retrieverCapacity": "requires-scheduler-verification",
+            "detail": "GPU sharing requires separate KAI queue and GPU-memory checks",
+        }))
+        return 0
+
+    topology = yaml.safe_load(
+        (ROOT / "stack" / "topology.yaml").read_text(encoding="utf-8")
     )
-)
+    retriever_namespace = topology["releases"]["retriever"]["namespace"]
+    embedder_replicas = retriever["embedder"]["replicaCount"]
+    gpu_nodes = {name for name, count in ready_nodes.items() if count > 0}
+    if len(gpu_nodes) < embedder_replicas:
+        raise SystemExit(
+            f"embedder hard spread needs {embedder_replicas} GPU nodes; found {len(gpu_nodes)}"
+        )
+
+    pods = kubectl_json("get", "pods", "--all-namespaces")["items"]
+    used_by_node = {name: 0 for name in ready_nodes}
+    live_embedder_nodes: set[str] = set()
+    live_embedders = 0
+    for pod in pods:
+        if pod.get("status", {}).get("phase") in {"Succeeded", "Failed"}:
+            continue
+        node = pod.get("spec", {}).get("nodeName")
+        if node not in used_by_node:
+            continue
+        containers = pod.get("spec", {}).get("containers", [])
+        init_containers = pod.get("spec", {}).get("initContainers", [])
+        requested = max(
+            sum(gpu_request(container) for container in containers),
+            max((gpu_request(container) for container in init_containers), default=0),
+        )
+        used_by_node[node] += requested
+        labels = pod.get("metadata", {}).get("labels", {})
+        if (
+            pod.get("metadata", {}).get("namespace") == retriever_namespace
+            and labels.get("app.kubernetes.io/component") == "embedder"
+        ):
+            live_embedders += 1
+            live_embedder_nodes.add(node)
+
+    additional_embedders = max(0, embedder_replicas - live_embedders)
+    free_by_node = {
+        name: ready_nodes[name] - used_by_node[name]
+        for name in gpu_nodes
+    }
+    eligible_new_nodes = [
+        name
+        for name, free in free_by_node.items()
+        if free > 0 and name not in live_embedder_nodes
+    ]
+    if len(eligible_new_nodes) < additional_embedders:
+        raise SystemExit(
+            f"embedder rollout needs {additional_embedders} additional distinct GPU nodes; "
+            f"eligible={eligible_new_nodes or 'none'}"
+        )
+
+    print(
+        json.dumps(
+            {
+                "readyNodes": len(ready_nodes),
+                "gpuNodes": len(gpu_nodes),
+                "liveEmbedders": live_embedders,
+                "targetEmbedders": embedder_replicas,
+                "eligibleNewEmbedderNodes": eligible_new_nodes,
+            },
+            sort_keys=True,
+        )
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

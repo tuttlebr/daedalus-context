@@ -280,14 +280,20 @@ func TestSanitizeForOutput_KeyAwareRedaction(t *testing.T) {
 		},
 	}
 
-	result := SanitizeForOutput(input).(map[string]interface{})
+	result, ok := SanitizeForOutput(input).(map[string]interface{})
+	if !ok {
+		t.Fatal("sanitized output must remain an object")
+	}
 	if result["username"] != "admin" {
 		t.Fatalf("non-sensitive username changed: %#v", result["username"])
 	}
 	if result["password"] == "short-secret" {
 		t.Fatal("password was not redacted")
 	}
-	nested := result["nested"].(map[string]interface{})
+	nested, ok := result["nested"].(map[string]interface{})
+	if !ok {
+		t.Fatal("sanitized nested output must remain an object")
+	}
 	if nested["apiKey"] == "abc123" {
 		t.Fatal("nested apiKey was not redacted")
 	}

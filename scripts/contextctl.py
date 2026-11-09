@@ -8,6 +8,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -265,7 +266,7 @@ def agent_env(environment_name: str) -> str:
         f"KUBERNETES_MCP_SERVER={url('k8s-mcp', 'mcp', '/mcp')}",
         f"UNIFI_MCP_SERVER={url('unifi-mcp', 'mcp', '/mcp')}",
         f"DAEDALUS_RAG_READINESS_MODE={environment['ragReadinessMode']}",
-        f"DAEDALUS_REQUIRED_COLLECTIONS={required}",
+        f"DAEDALUS_REQUIRED_COLLECTIONS={shlex.quote(required)}",
     ]
     return "\n".join(lines) + "\n"
 

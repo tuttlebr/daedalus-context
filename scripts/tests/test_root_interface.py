@@ -58,7 +58,7 @@ class RootInterfaceTests(unittest.TestCase):
                 f'nv-ingest.envVars.{variable}="$(LOCAL_DOCUMENT_PARSE_ENDPOINT)/legacy-disabled"',
                 makefile,
             )
-            self.assertRegex(example, rf"(?m)^{re.escape(variable)}=.*$")
+            self.assertNotRegex(example, rf"(?m)^{re.escape(variable)}=.*$")
 
         url_ingest = yaml.safe_load(
             (ROOT / "url-ingest/chart/values.yaml").read_text(encoding="utf-8")
@@ -85,9 +85,11 @@ class RootInterfaceTests(unittest.TestCase):
         for component, release in topology["releases"].items():
             self.assertEqual(release["owner"], locked[component]["source"])
             chart = ROOT / release["owner"]
-            self.assertTrue((chart / "Chart.yaml").is_file(), chart)
-            self.assertTrue((chart / "values.yaml").is_file(), chart)
+            # Hindsight belongs to another repository. Its declared contract is
+            # checked here; make validate-helm checks the selected checkout.
             if not release["owner"].startswith("../"):
+                self.assertTrue((chart / "Chart.yaml").is_file(), chart)
+                self.assertTrue((chart / "values.yaml").is_file(), chart)
                 self.assertEqual(Path(release["owner"]).parts[1:], ("chart",))
                 owned_charts.add(chart / "Chart.yaml")
         self.assertEqual(set(ROOT.glob("*/chart/Chart.yaml")), owned_charts)
@@ -228,6 +230,7 @@ class RootInterfaceTests(unittest.TestCase):
                     "make",
                     "--no-print-directory",
                     "doctor",
+                    "COMPONENTS=k8s-mcp",
                     f"ENV_FILE={env_file}",
                     f"KUBECTL={kubectl}",
                     "JQ=true",

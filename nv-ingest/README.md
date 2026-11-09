@@ -1,13 +1,13 @@
-# NV-Ingest Deployment
+# NV-Ingest
 
-NV-Ingest provides document extraction for the Daedalus retrieval stack.
+NV-Ingest provides document extraction for the Daedalus Context monorepo.
 [URL ingestion](../url-ingest/README.md) owns refresh scheduling, chunking,
 embedding, and collection writes. The active release is
 [NV-Ingest chart](chart/README.md) in the shared `daedalus` namespace.
 
 ## Configuration and operation
 
-Use the root `.env` and the [root configuration workflow](../README.md#configuration).
+Use the root `.env` and the [root configuration workflow](../docs/deployment.md#configuration).
 The [chart values](chart/values.yaml),
 [component lock](../stack/components.lock.yaml), and root [Makefile](../Makefile)
 own image versions, replica counts, placement, endpoints, and storage settings.
@@ -19,7 +19,7 @@ The chart references them without putting credential values in Helm. Configure
 PDF extraction uses the local parser deployed by this chart. Keep the embedding model aligned
 with [stack/rag-schema.yaml](../stack/rag-schema.yaml).
 
-Build and publish the parser separately with
+Build and publish the parser from the repository root with
 `make images-publish IMAGE_BUILD_SERVICES=nv-ingest-parser`. The image contains
 the pinned model weights and custom model code; inference runs with Hugging Face
 network access disabled. See [local parser](local-parser/README.md) for its contract.
@@ -35,8 +35,12 @@ make health-integration COMPONENTS=nv-ingest
 ```
 
 If dependencies are already healthy, limit reconciliation to `nv-ingest`.
+The checked-in values describe the reference Daedalus cluster: review GPU node
+selection, CPU/memory requests, Redis placement, and StorageClasses before using
+another cluster. Selecting the development environment does not replace those
+chart settings.
 Before a rollout, inspect active ingestion Jobs and coordinate their completion:
-replacing API pods can interrupt their in-flight extraction work. Coordinate this before using the root deployment workflow.
+replacing API pods can interrupt their in-flight extraction work.
 
 Routine deployment does not publish images or populate collections. Submit
 refresh work separately through `make refresh-run COLLECTIONS="..."` when data
@@ -56,7 +60,7 @@ or native-text fallback.
 For a stalled refresh, inspect the refresh report and Job, followed by API and
 Redis logs. A rollout is not a substitute for diagnosing request timeouts,
 upstream failures, or capacity limits. Redis storage and recovery boundaries
-are described in the [root recovery guide](../README.md#recovery).
+are described in the [root recovery guide](../docs/operations.md#recovery).
 
 ## Development and validation
 

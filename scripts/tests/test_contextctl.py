@@ -128,5 +128,24 @@ class OperationGraphTests(unittest.TestCase):
         self.assertEqual(report["components"]["url-ingest"]["status"], "blocked")
 
 
+class AgentEnvironmentTests(unittest.TestCase):
+    def test_generated_environment_can_be_sourced_with_multiword_collections(self):
+        result = subprocess.run(
+            ["bash", "-euc", contextctl.agent_env("production") +
+             '\nprintf "%s" "$DAEDALUS_REQUIRED_COLLECTIONS"'],
+            check=True, capture_output=True, text=True,
+        )
+        environment = contextctl.load_yaml(contextctl.STACK / "environments/production.yaml")
+        self.assertEqual(result.stdout, " ".join(environment["requiredCollections"]))
+
+    def test_empty_collection_selection_is_sourceable(self):
+        result = subprocess.run(
+            ["bash", "-euc", contextctl.agent_env("development") +
+             '\nprintf "%s" "$DAEDALUS_REQUIRED_COLLECTIONS"'],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(result.stdout, "")
+
+
 if __name__ == "__main__":
     unittest.main()

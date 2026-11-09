@@ -9,12 +9,10 @@ test:
 	docker build --target check .
 
 docker-build:
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  --profile ingest build url-ingest nv-ingest-ms-tasks
+	$(MAKE) -C .. images-build IMAGE_BUILD_SERVICES="url-ingest nv-ingest-ms-tasks"
 
-docker-push: docker-build
-	docker compose --project-directory .. -f ../docker-compose.yaml \
-	  --profile ingest push url-ingest nv-ingest-ms-tasks
+docker-push:
+	$(MAKE) -C .. images-push IMAGE_BUILD_SERVICES="url-ingest nv-ingest-ms-tasks"
 
 validate: test validate-chart
 

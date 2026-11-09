@@ -5,7 +5,7 @@ in [Chart.yaml](Chart.yaml), applies [values.yaml](values.yaml), and adds
 application disruption budgets. The root workflow supplies the storage classes
 and always uses [post-render.py](post-render.py).
 
-After the [root configuration setup](../../README.md#configuration), run from
+After the [root configuration setup](../../docs/deployment.md#configuration), run from
 the repository root:
 
 ```bash
@@ -25,7 +25,7 @@ includes the `mc` client; both image references are configured in
 `mc policy set` command to `mc anonymous set` and supplies taint-aware MinIO
 topology spread. Use it for every render or reconciliation. Replica placement
 and disruption budgets do not remove shared storage failure domains. Consult
-the [recovery guide](../../README.md#recovery) before restarting stateful
+the [recovery guide](../../docs/operations.md#recovery) before restarting stateful
 workloads. Never reset metadata or delete claims as a health check.
 
 Validate through root `make validate-helm`. The component tools under

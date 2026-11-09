@@ -92,6 +92,7 @@ func constantTimeEqual(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+//nolint:gocritic // Match the MCP SDK AddTool value API at registration time.
 func addAuditedTool(s *server.MCPServer, tool mcp.Tool, capability string, handler server.ToolHandlerFunc) {
 	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()

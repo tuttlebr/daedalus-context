@@ -1,13 +1,14 @@
 # Kubernetes and Helm MCP Server
 
 This Go server exposes Kubernetes and Helm tools through MCP, with stdio, SSE,
-and streamable HTTP transports. The root deployment defaults to authenticated,
+and streamable HTTP transports. It is the Kubernetes tool provider in the
+Daedalus Context monorepo. The root deployment defaults to authenticated,
 read-only Kubernetes access. Optional write tools and the opencode-backed
 DevOps agent have explicit capability gates.
 
 ## Deployment
 
-Use the [root configuration setup](../README.md#configuration), then run from
+Use the [root configuration setup](../docs/deployment.md#configuration), then run from
 the repository root:
 
 ```bash
@@ -36,7 +37,7 @@ provide current/next auth tokens and optional agent configuration.
 
 External access defaults off. When enabled, the root workflow uses the configured
 fixed NodePort and client CIDR. Follow the
-[external MCP prerequisite](../README.md#external-mcp-network-prerequisite),
+[external MCP prerequisite](../docs/deployment.md#external-mcp-network-prerequisite),
 preserve working LAN clients and routes, and verify the authenticated API from
 a non-node LAN source. The root workflow deploys the service-owned `chart/`;
 `make render` in this folder renders that same chart locally.
@@ -59,6 +60,9 @@ read-only mode explicitly for inspection.
 Build and publish images through the root image workflow. The
 [Dockerfile](src/Dockerfile) owns runtime dependencies and bundled tooling;
 [go.mod](src/go.mod) and `go.sum` own library versions.
+The component `docker` and `docker-push` targets delegate to the root image
+commands with `IMAGE_BUILD_SERVICES=k8s-mcp-server-read-only`; the historical
+Compose service name does not override the chart's capability settings.
 
 ## Server Configuration
 
@@ -103,7 +107,8 @@ These are **optional**. When all three are set, the `devopsAgent` tool is regist
 
 ### Health Check
 
-All HTTP modes expose local-only `GET /livez` and `/readyz`.
+All HTTP modes expose `GET /livez` and `/readyz`, which check only the server
+process and do not query Kubernetes.
 `GET /dependencyz` performs one bounded Kubernetes API request. `/healthz`
 remains a local compatibility alias. Upstream slowness never turns liveness
 into a restart loop.
@@ -296,7 +301,7 @@ Use root `make validate-local` for executable source changes and
 
 ### Adding a New Tool
 
-1. **Define the schema** in `tools/k8s.go` (or `tools/helm.go`):
+1. **Define the schema** in `src/tools/k8s.go` (or `src/tools/helm.go`):
 
 ```go
 func MyNewTool() mcp.Tool {
@@ -307,11 +312,11 @@ func MyNewTool() mcp.Tool {
 }
 ```
 
-2. **Implement the client method** in `pkg/k8s/client.go` (or `pkg/helm/client.go`)
+2. **Implement the client method** in `src/pkg/k8s/client.go` (or `src/pkg/helm/client.go`)
 
-3. **Create the handler** in `handlers/k8s.go` (or `handlers/helm.go`)
+3. **Create the handler** in `src/handlers/k8s.go` (or `src/handlers/helm.go`)
 
-4. **Register** in `main.go` through the audited wrapper:
+4. **Register** in `src/main.go` through the audited wrapper:
 
 ```go
 addAuditedTool(s, tools.MyNewTool(), "read", handlers.MyNewHandler(client))
