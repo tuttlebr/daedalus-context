@@ -127,20 +127,9 @@ func TestGetCachedGVR_CaseInsensitiveFallback(t *testing.T) {
 }
 
 func TestGetCachedGVR_NotFound(t *testing.T) {
-	// A client with a valid, populated cache but no entry for "nonexistent".
-	// getCachedGVR will miss the cache, then try discovery (nil client) which panics.
-	// So we test the simpler case: a fresh cache with only known entries.
-	c := newTestClient()
-	_ = c // cache is valid; lookup of a known key works, but "nonexistent" would
-	// fall through to discovery. This path requires a real cluster and is
-	// covered by integration tests. Verify the cache-hit path returns correct
-	// results for known types instead.
-	gvr, err := c.getCachedGVR("pods")
-	if err != nil {
-		t.Fatalf("unexpected error for known type: %v", err)
-	}
-	if gvr.Resource != "pods" {
-		t.Errorf("got %v, want pods", gvr.Resource)
+	c, _, _ := discoveryFixture(t, &atomic.Bool{}, false)
+	if _, err := c.getCachedGVR("nonexistent"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected missing resource error from fresh cache, got %v", err)
 	}
 }
 

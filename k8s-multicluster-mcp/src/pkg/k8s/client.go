@@ -50,15 +50,16 @@ const (
 )
 
 type Client struct {
-	clientset        *kubernetes.Clientset
-	dynamicClient    dynamic.Interface
-	discoveryClient  *discovery.DiscoveryClient
-	metricsClientset *metricsclientset.Clientset
-	restConfig       *rest.Config
-	kubeconfigPath   string
-	apiResourceCache map[string]*schema.GroupVersionResource
-	cacheLock        sync.RWMutex
-	cacheRefreshedAt time.Time
+	clientset           *kubernetes.Clientset
+	dynamicClient       dynamic.Interface
+	discoveryClient     *discovery.DiscoveryClient
+	metricsClientset    *metricsclientset.Clientset
+	restConfig          *rest.Config
+	kubeconfigPath      string
+	apiResourceCache    map[string]*schema.GroupVersionResource
+	resourceAmbiguities map[string][]string
+	cacheLock           sync.RWMutex
+	cacheRefreshedAt    time.Time
 }
 
 // NewClient creates a new Kubernetes client.
@@ -615,85 +616,109 @@ func (c *Client) DeleteResource(ctx context.Context, kind, name, namespace strin
 	return nil
 }
 
-// getCachedGVR retrieves the GroupVersionResource for a given kind, using a cache with TTL.
-// It supports lookup by PascalCase Kind (e.g. "Deployment"), lowercase plural resource name
-// (e.g. "deployments"), or lowercase singular name (e.g. "deployment").
+// getCachedGVR resolves unqualified aliases to core resources first, then to a
+// unique non-core resource. Group-qualified names select that group explicitly.
+// Never let discovery ordering choose the target of a mutation.
 func (c *Client) getCachedGVR(kind string) (*schema.GroupVersionResource, error) {
+	if strings.Contains(kind, "/") {
+		return nil, fmt.Errorf("subresource %q is not supported by generic resource lookup", kind)
+	}
 	c.cacheLock.RLock()
-	cacheValid := time.Since(c.cacheRefreshedAt) < gvrCacheTTL
-	if cacheValid {
-		if gvr, exists := c.apiResourceCache[kind]; exists {
-			c.cacheLock.RUnlock()
-			return gvr, nil
-		}
-		if gvr, exists := c.apiResourceCache[strings.ToLower(kind)]; exists {
-			c.cacheLock.RUnlock()
-			return gvr, nil
-		}
+	observed := c.cacheRefreshedAt
+	if time.Since(observed) < gvrCacheTTL && c.hasCachedResource(kind) {
+		defer c.cacheLock.RUnlock()
+		return c.cachedResource(kind)
 	}
 	c.cacheLock.RUnlock()
 
+	// Refresh on a miss so newly registered CRDs are usable immediately.
 	resourceLists, err := c.discoveryClient.ServerPreferredResources()
-	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
+	if err != nil {
+		// An incomplete inventory cannot prove an alias is unambiguous. Do not
+		// publish a partial cache or refresh its TTL after failed discovery.
 		return nil, fmt.Errorf("failed to retrieve API resources: %w", err)
 	}
 
 	c.cacheLock.Lock()
 	defer c.cacheLock.Unlock()
-
-	// Double-check: another goroutine may have rebuilt the cache while we waited
-	// for the write lock. If the cache is now valid, try a lookup before rebuilding.
-	if time.Since(c.cacheRefreshedAt) < gvrCacheTTL {
-		if gvr, exists := c.apiResourceCache[kind]; exists {
-			return gvr, nil
-		}
-		if gvr, exists := c.apiResourceCache[strings.ToLower(kind)]; exists {
-			return gvr, nil
-		}
-	} else {
-		c.apiResourceCache = make(map[string]*schema.GroupVersionResource)
+	if c.cacheRefreshedAt.After(observed) && time.Since(c.cacheRefreshedAt) < gvrCacheTTL && c.hasCachedResource(kind) {
+		return c.cachedResource(kind)
 	}
-	c.cacheRefreshedAt = time.Now()
 
-	var result *schema.GroupVersionResource
-	kindLower := strings.ToLower(kind)
+	candidates := make(map[string]map[schema.GroupVersionResource]*schema.GroupVersionResource)
+	add := func(alias string, gvr *schema.GroupVersionResource) {
+		if alias == "" {
+			return
+		}
+		alias = strings.ToLower(alias)
+		if candidates[alias] == nil {
+			candidates[alias] = make(map[schema.GroupVersionResource]*schema.GroupVersionResource)
+		}
+		candidates[alias][*gvr] = gvr
+	}
 	for _, resourceList := range resourceLists {
 		gv, err := schema.ParseGroupVersion(resourceList.GroupVersion)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("invalid discovered API group: %w", err)
 		}
-		for i := range resourceList.APIResources {
-			resource := &resourceList.APIResources[i]
-			gvr := &schema.GroupVersionResource{
-				Group:    gv.Group,
-				Version:  gv.Version,
-				Resource: resource.Name,
+		for _, resource := range resourceList.APIResources {
+			if strings.Contains(resource.Name, "/") {
+				continue
 			}
-			c.apiResourceCache[resource.Kind] = gvr
-			c.apiResourceCache[resource.Name] = gvr
-			if resource.SingularName != "" {
-				c.apiResourceCache[resource.SingularName] = gvr
-			}
-			for _, shortName := range resource.ShortNames {
-				c.apiResourceCache[shortName] = gvr
-			}
-
-			if resource.Kind == kind || resource.Name == kind ||
-				resource.SingularName == kind ||
-				strings.EqualFold(resource.Kind, kindLower) ||
-				resource.Name == kindLower {
-				result = gvr
-			}
-			for _, shortName := range resource.ShortNames {
-				if shortName == kind || shortName == kindLower {
-					result = gvr
+			gvr := &schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: resource.Name}
+			aliases := append([]string{resource.Name, resource.Kind, resource.SingularName}, resource.ShortNames...)
+			for _, alias := range aliases {
+				add(alias, gvr)
+				if alias != "" && gv.Group != "" {
+					add(alias+"."+gv.Group, gvr)
 				}
 			}
 		}
 	}
+	cache := make(map[string]*schema.GroupVersionResource)
+	ambiguities := make(map[string][]string)
+	for alias, options := range candidates {
+		var core []*schema.GroupVersionResource
+		for _, gvr := range options {
+			if gvr.Group == "" {
+				core = append(core, gvr)
+			}
+		}
+		if len(core) == 1 {
+			cache[alias] = core[0]
+		} else if len(options) == 1 {
+			for _, gvr := range options {
+				cache[alias] = gvr
+			}
+		} else {
+			for _, gvr := range options {
+				ambiguities[alias] = append(ambiguities[alias], gvr.GroupResource().String())
+			}
+			sort.Strings(ambiguities[alias])
+		}
+	}
+	c.apiResourceCache, c.resourceAmbiguities = cache, ambiguities
+	c.cacheRefreshedAt = time.Now()
+	return c.cachedResource(kind)
+}
 
-	if result != nil {
-		return result, nil
+// hasCachedResource requires cacheLock to be held.
+func (c *Client) hasCachedResource(kind string) bool {
+	key := strings.ToLower(kind)
+	return c.apiResourceCache[kind] != nil || c.apiResourceCache[key] != nil || len(c.resourceAmbiguities[key]) > 0
+}
+
+// cachedResource requires cacheLock to be held.
+func (c *Client) cachedResource(kind string) (*schema.GroupVersionResource, error) {
+	key := strings.ToLower(kind)
+	if options := c.resourceAmbiguities[key]; len(options) > 0 {
+		return nil, fmt.Errorf("resource type %q is ambiguous; use a group-qualified resource: %s", kind, strings.Join(options, ", "))
+	}
+	if gvr, ok := c.apiResourceCache[kind]; ok {
+		return gvr, nil
+	}
+	if gvr, ok := c.apiResourceCache[key]; ok {
+		return gvr, nil
 	}
 	return nil, fmt.Errorf("resource type %s not found", kind)
 }

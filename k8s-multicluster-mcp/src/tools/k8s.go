@@ -239,10 +239,11 @@ func CreateOrUpdateResourceYAMLTool() mcp.Tool {
 func DeleteResourceTool() mcp.Tool {
 	return mcp.NewTool(
 		"deleteResource",
-		mcp.WithDescription("Delete a Kubernetes resource by kind and name. This is a destructive operation that cannot be undone. "+
+		mcp.WithDescription("Request deletion of a Kubernetes resource by kind and name. Verify resource absence before reporting completion. This is a destructive operation that cannot be undone. "+
 			"WRITE OPERATION: only available when server is not in read-only mode."),
 		mcp.WithString("kind", mcp.Required(),
-			mcp.Description("Resource type in lowercase plural form. "+
+			mcp.Description("Resource type in lowercase plural form, optionally qualified as resource.group. "+
+				"Unqualified names prefer core Kubernetes resources; ambiguous non-core names require a group. "+
 				"Examples: \"deployments\", \"pods\", \"services\", \"configmaps\", \"secrets\". "+
 				"Do NOT use PascalCase like \"Deployment\" or singular like \"pod\".")),
 		mcp.WithString("name", mcp.Required(),
@@ -718,6 +719,7 @@ func RunKubectlCommandTool() mcp.Tool {
 			"The command must start with 'kubectl' and is executed without shell interpretation, "+
 			"so pipes, redirects, shell expansions, and command chaining are not supported. "+
 			"Use this when the structured MCP tools do not expose the exact data you need. "+
+			"Check exitCode, stdout and stderr; nonzero exit codes are tool errors and may include partial changes. "+
 			"Examples: "+
 			"\"kubectl get pods -A --field-selector=status.phase=Pending -o wide\", "+
 			"\"kubectl top nodes --sort-by=cpu\". "+

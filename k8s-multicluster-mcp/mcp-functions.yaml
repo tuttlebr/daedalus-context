@@ -213,7 +213,7 @@ functions:
 
   k8s_mcp_delete_resource:
     _type: mcp_tool_wrapper
-    description: Deletes a Kubernetes resource by kind and name. Destructive and cannot be undone. WRITE OPERATION.
+    description: Requests deletion by resource name and kind (optionally resource.group). Verify resource absence before reporting completion. Destructive WRITE OPERATION.
     mcp_tool_name: deleteResource
     url: ${KUBERNETES_MCP_SERVER}
 
@@ -243,7 +243,7 @@ functions:
 
   k8s_mcp_run_kubectl_command:
     _type: mcp_tool_wrapper
-    description: Executes a direct kubectl command on the MCP server host. Requires kubectl in PATH. Pipes, redirects, shell expansions, and command chaining are not supported. DANGEROUS OPERATION; requires explicit kubectl capability.
+    description: Executes a direct kubectl command on the MCP server host. Requires kubectl in PATH. Check exitCode, stdout and stderr; nonzero exits are tool errors and may include partial changes. Pipes, redirects, shell expansions, and command chaining are not supported. DANGEROUS OPERATION; requires explicit kubectl capability.
     mcp_tool_name: runKubectlCommand
     url: ${KUBERNETES_MCP_SERVER}
 

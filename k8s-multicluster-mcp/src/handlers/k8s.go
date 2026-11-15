@@ -486,7 +486,7 @@ func DeleteResource(client *k8s.Client) func(ctx context.Context, request mcp.Ca
 			return nil, fmt.Errorf("failed to delete resource: %w", err)
 		}
 
-		return mcp.NewToolResultText("Resource deleted successfully"), nil
+		return mcp.NewToolResultText("Deletion request accepted. Verify that the resource is absent before reporting deletion complete."), nil
 	}
 }
 
@@ -1398,7 +1398,9 @@ func RunKubectlCommand(client *k8s.Client) func(ctx context.Context, request mcp
 			return nil, fmt.Errorf("failed to serialize response: %w", err)
 		}
 
-		return mcp.NewToolResultText(string(jsonResponse)), nil
+		response := mcp.NewToolResultText(string(jsonResponse))
+		response.IsError = result["exitCode"] != 0
+		return response, nil
 	}
 }
 

@@ -263,9 +263,30 @@ Disabled when `--read-only` is set.
 
 \* = required parameter
 
+### Execution results and verification
+
+Tool execution failures return MCP `isError: true` with a bounded, sanitized
+cause. A successful transport response alone does not establish that a command
+worked. `runKubectlCommand` preserves `exitCode`, stdout, stderr, and timeout
+information, and marks nonzero exits as tool errors. A failed command may have
+made partial changes; inspect state before repeating it.
+
+`deleteResource` confirms that Kubernetes accepted the request. Deletion can be
+asynchronous. Verify that the intended resource is absent before reporting
+completion; an unchanged age or a successful DELETE response is insufficient.
+
 ### Resource Identifier Flexibility
 
-The `kind` parameter across all tools accepts multiple formats. All of these resolve to the same resource:
+Tools using dynamic resource lookup accept plural names, Kinds, singular names,
+and short names. Unqualified aliases prefer core Kubernetes resources, so `pods`
+selects core `v1/pods` even when the metrics API also advertises `pods`. Otherwise
+an alias must identify one resource. Ambiguous aliases fail with qualified
+choices; use `resource.group`, such as `widgets.example.com`, to choose explicitly.
+`pods.metrics.k8s.io` continues to select the metrics API when requested.
+Subresources are excluded from this generic lookup. Discovery failures do not
+publish a partial inventory or extend the cache lifetime.
+
+These aliases resolve to the same resource when unambiguous:
 
 | Format             | Example       |
 | ------------------ | ------------- |

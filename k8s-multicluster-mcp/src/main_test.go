@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func TestGetEnvBoolDefault(t *testing.T) {
@@ -109,5 +112,39 @@ func TestNonHealthPathStillRequiresAuth(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", response.Code)
+	}
+}
+
+func TestAuditedToolReturnsBoundedSanitizedExecutionErrors(t *testing.T) {
+	s := server.NewMCPServer("test", "1")
+	calls := 0
+	addAuditedTool(s, mcp.NewTool("fail"), "write", func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		calls++
+		return nil, fmt.Errorf("method not allowed; token=private-value %s", strings.Repeat("diagnostic ", 10000))
+	})
+	response := s.HandleMessage(context.Background(), json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fail","arguments":{}}}`))
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Error  json.RawMessage    `json:"error"`
+		Result mcp.CallToolResult `json:"result"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Error) != 0 || !wire.Result.IsError {
+		t.Fatalf("expected tool error instead of RPC error: %.100s", encoded)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, "method not allowed") || strings.Contains(text, "private-value") {
+		t.Fatal("error cause lost or secret leaked")
+	}
+	if len(encoded) >= 128*1024 {
+		t.Fatal("unbounded execution error")
+	}
+	if calls != 1 {
+		t.Fatalf("handler ran %d times", calls)
 	}
 }

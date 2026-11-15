@@ -97,9 +97,12 @@ func addAuditedTool(s *server.MCPServer, tool mcp.Tool, capability string, handl
 	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
 		result, err := handler(ctx, request)
-		if err == nil {
-			boundToolResult(result)
+		if err != nil {
+			// Handler failures are tool execution errors, not JSON-RPC failures.
+			// Preserve their cause for clients while bounding/redacting all output.
+			result = mcp.NewToolResultError(k8s.SanitizeText(err.Error()))
 		}
+		boundToolResult(result)
 		status := "ok"
 		if err != nil {
 			status = "error"
@@ -108,12 +111,12 @@ func addAuditedTool(s *server.MCPServer, tool mcp.Tool, capability string, handl
 		}
 		if err != nil {
 			log.Printf("mcp_tool_call tool=%s capability=%s status=%s duration=%s error=%q",
-				tool.Name, capability, status, time.Since(start), err.Error())
+				tool.Name, capability, status, time.Since(start), k8s.SanitizeText(err.Error()))
 		} else {
 			log.Printf("mcp_tool_call tool=%s capability=%s status=%s duration=%s",
 				tool.Name, capability, status, time.Since(start))
 		}
-		return result, err
+		return result, nil
 	})
 }
 

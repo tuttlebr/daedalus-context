@@ -1,6 +1,13 @@
 package handlers
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tuttlebr/kubernetes-mcp-server/pkg/k8s"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +182,35 @@ func TestMarshalSafeRedactsSensitiveStructuredOutput(t *testing.T) {
 		if strings.Contains(output, leaked) {
 			t.Fatalf("sensitive value %q leaked in %s", leaked, output)
 		}
+	}
+}
+
+func TestKubectlResultSignalsProcessFailure(t *testing.T) {
+	for _, exitCode := range []int{0, 1, 7} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
+			dir := t.TempDir()
+			script := fmt.Sprintf("#!/bin/sh\nprintf 'partial output'\nprintf 'diagnostic' >&2\nexit %d\n", exitCode)
+			if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			request := mcp.CallToolRequest{}
+			request.Params.Arguments = map[string]interface{}{"command": "kubectl get pods"}
+			result, err := RunKubectlCommand(&k8s.Client{})(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.IsError != (exitCode != 0) {
+				t.Fatalf("exit %d: isError=%v", exitCode, result.IsError)
+			}
+			content := result.Content[0].(mcp.TextContent)
+			var payload map[string]interface{}
+			if err := json.Unmarshal([]byte(content.Text), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["exitCode"] != float64(exitCode) || payload["stdout"] != "partial output" || payload["stderr"] != "diagnostic" {
+				t.Fatalf("command evidence lost: %v", payload)
+			}
+		})
 	}
 }
