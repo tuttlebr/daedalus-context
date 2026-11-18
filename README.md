@@ -142,11 +142,28 @@ adapting the reference deployment.
 the stack files. Merge it into the Agent's deployment configuration and supply
 matching credentials through your secret-management process. The generated
 file is a contract, not an Agent deployment or a credential bundle.
+When the Agent Helm chart has `retrieval.enabled: true`, copy `MILVUS_URI` and
+`MILVUS_DATABASE` to `retrieval.milvus.endpoint` and `retrieval.milvus.database`.
+Map readiness mode and required collections to `retrieval.readiness.mode` and
+`retrieval.readiness.requiredCollections`. Those chart values take precedence
+over duplicate generic backend environment overrides. Other service URLs and
+model settings go into the Agent environment consumed by its workflow.
 The ingestion consumer uses `NV_INGEST_HOST` and `NV_INGEST_PORT`;
 `NV_INGEST_ENDPOINT` is also emitted for URL-based integrations. Merge these
 settings into every Agent worker that ingests documents. Private upload storage
 and its credentials remain part of the Agent deployment, separate from curated
 collection refreshes.
+
+Keep the generated `EMBEDDING_MODEL` and `EMBEDDING_NIM_MODEL_NAME` aligned.
+The first selects query embeddings; the Agent records the second as the upload
+collection's embedding model identity. Configure backend egress and service
+ingress as well as URLs: generating an endpoint does not grant network access.
+
+For a complete integration check, ask the Agent to search a configured domain
+for a passage known to be in that collection. Follow the query through embeddings,
+Milvus and optional reranking, then check the returned source citation. Test a
+private upload separately: successful curated search does not exercise upload
+extraction, user scope, collection metadata or object storage.
 
 Query and document embeddings must use the same model revision and vector
 space. Equal dimensions alone do not establish compatibility. Daedalus uses

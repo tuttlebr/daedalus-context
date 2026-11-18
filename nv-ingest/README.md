@@ -42,9 +42,17 @@ chart settings.
 Before a rollout, inspect active ingestion Jobs and coordinate their completion:
 replacing API pods can interrupt their in-flight extraction work.
 
-Routine deployment does not publish images or populate collections. Submit
-refresh work separately through `make refresh-run COLLECTIONS="..."` when data
-writes are intended.
+`make deploy COMPONENTS=nv-ingest` builds and publishes the local parser image
+before reconciling the selected release; upstream NV-Ingest images retain their
+pinned references. Use `make update COMPONENTS=nv-ingest` to reconcile
+already-published images. Neither command populates collections. Submit refresh
+work separately through `make refresh-run COLLECTIONS="..."` when data writes
+are intended.
+
+The Agent's private-upload pipeline is another direct NV-Ingest consumer. It
+uses `NV_INGEST_HOST` and `NV_INGEST_PORT` and owns its user-scoped collection
+metadata and object lifecycle. A successful curated refresh does not exercise
+that upload path; check extraction through the consumer you are changing.
 
 ## Readiness and diagnostics
 
