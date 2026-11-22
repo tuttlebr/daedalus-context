@@ -163,15 +163,12 @@ Retriever and parser LAN exposure is independent of `MCP_EXTERNAL_ENABLED`:
 
 The [retriever overlay](../nemotron-retriever/chart/values-daedalus.yaml) and
 [parser values](../nv-ingest/chart/values.yaml) own these settings. The retriever
-uses plain NodePorts and Cilium policies. Use the node hosting the model for
-LAN requests: the committed forwarding policy permits host/remote-node identities
-and blocks cross-node LAN traffic retaining the `world` identity. These plain
-NodePorts do not enforce an original-client allowlist on every source-NAT path.
-A source-restricted LoadBalancer profile needs a separately reviewed configuration.
-Confirm the selected policy and actual client path; a NodePort allocation alone
-does not establish forwarding or source enforcement. Internal Service DNS
-remains the Agent's path. The model adapters' API-key placeholders do not provide
-authentication; preserve their network access controls.
+uses the addressless `daedalus.ai/nodeport-only` LoadBalancer class. Cilium
+applies the configured source ranges at each NodePort before source NAT and
+permits forwarded connections to the model API port. Verify both APIs from
+a non-node LAN client, including through a node remote from each ready backend.
+The Agent uses internal Service DNS. The model adapters rely on network access
+controls for this exposure.
 
 For a UniFi controller with a private CA, configure `UNIFI_CONTROLLER_CA_FILE`
 and, when needed, the paired hostname/IP settings. Keep TLS verification enabled.

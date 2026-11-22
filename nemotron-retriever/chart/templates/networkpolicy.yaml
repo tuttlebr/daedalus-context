@@ -63,6 +63,10 @@ spec:
     - fromEntities:
         - host
         - remote-node
+        {{- if and (eq $server.service.type "LoadBalancer") (eq $server.service.loadBalancerClass "daedalus.ai/nodeport-only") (eq $server.service.externalTrafficPolicy "Cluster") }}
+        {{- /* The source-filtered frontend retains this identity on cross-node SNAT. */}}
+        - world
+        {{- end }}
       toPorts:
         - ports:
             - port: {{ ternary $.Values.nimCompatibility.port $server.port $.Values.nimCompatibility.enabled | quote }}

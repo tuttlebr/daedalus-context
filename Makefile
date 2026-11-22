@@ -506,17 +506,21 @@ deploy-hindsight:
 	  NAMESPACE="$(DAEDALUS_NAMESPACE)" EXPECTED_CONTEXT="$(EXPECTED_CONTEXT)"
 
 deploy-retriever:
-	@values_args=(); \
+	@values_args=(--set-string fullnameOverride="$(RETRIEVER_FULLNAME)"); \
 	if [[ -n "$(RETRIEVER_VALUES_FILE)" ]]; then \
 	  [[ -f "$(RETRIEVER_VALUES_FILE)" ]] || { \
 	    echo "Retriever values file not found: $(RETRIEVER_VALUES_FILE)" >&2; exit 1; \
 	  }; \
 	  values_args+=(--values "$(RETRIEVER_VALUES_FILE)"); \
 	fi; \
+	profile="$$($(HELM) template "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
+	  --namespace "$(RETRIEVER_NAMESPACE)" "$${values_args[@]}" | \
+	  KUBECTL="$(KUBECTL)" python3 "$(ROOT_DIR)/scripts/check_retriever_network.py")"; \
+	wait_args=(--atomic --wait); \
+	if [[ "$$profile" == nodeport-only ]]; then wait_args=(); fi; \
 	$(HELM) upgrade --install "$(RETRIEVER_RELEASE)" "$(RETRIEVER_CHART)" \
 	  --namespace "$(RETRIEVER_NAMESPACE)" --create-namespace \
-	  --set-string fullnameOverride="$(RETRIEVER_FULLNAME)" \
-	  "$${values_args[@]}" --atomic --wait --history-max 10 \
+	  "$${values_args[@]}" "$${wait_args[@]}" --history-max 10 \
 	  --timeout "$(RETRIEVER_ROLLOUT_TIMEOUT)"; \
 	$(KUBECTL) --namespace="$(RETRIEVER_NAMESPACE)" rollout status deployment \
 	  --selector="app.kubernetes.io/instance=$(RETRIEVER_RELEASE)" \

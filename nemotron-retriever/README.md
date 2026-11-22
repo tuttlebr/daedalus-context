@@ -142,17 +142,18 @@ The base chart uses ClusterIP. The root
 | `nemotron-retriever-embedder` | `30085` | `8000` |
 | `nemotron-retriever-reranker` | `30086` | `8000` |
 
-Clients use a node's LAN address with the appropriate NodePort and API path.
-Use the node hosting the model for LAN requests. Although
-`externalTrafficPolicy: Cluster` enables forwarding, the supplemental Cilium
-policy permits only host/remote-node identities on that path. Cross-node LAN
-traffic retaining the `world` identity is denied. Per-endpoint CIDRs allow
-direct LAN traffic and namespace rules allow in-cluster consumers.
+LAN clients can use any cluster node's LAN address with the fixed port, including
+when a model moves to another node. Internal clients use the Service DNS names.
+The reference overlay uses the addressless `daedalus.ai/nodeport-only`
+LoadBalancer class. Cilium checks the original source against the Service's
+LAN, VPN and cluster source ranges before forwarding. On a remote backend,
+the packet can carry Cilium's `world` identity after source NAT. The forwarding
+policy admits that identity on the selected model's API port.
 
-Cross-node source NAT can replace the original client identity with the node
-identity. These plain NodePort CIDRs therefore do not enforce an original-client
-allowlist on all forwarded traffic. A stricter boundary requires a reviewed
-network-boundary or source-restricted LoadBalancer configuration.
+The root deployment checks `bpf-lb-source-range-all-types` before installing
+this policy and checks Deployment rollout and Cilium policy readiness for the
+addressless class. To verify the client path, send an embedding and a rerank
+request from a non-node LAN client through a node remote from each backend.
 
 Preserve existing endpoint names, ports, routes, and ordinary LAN clients.
 Before exposure changes,

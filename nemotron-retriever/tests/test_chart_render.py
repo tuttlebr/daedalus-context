@@ -213,14 +213,22 @@ class ChartRenderTests(unittest.TestCase):
 
         for component, node_port in {"embedder": 30085, "reranker": 30086}.items():
             service = services[component]
-            self.assertEqual(service["spec"]["type"], "NodePort")
+            self.assertEqual(service["spec"]["type"], "LoadBalancer")
             self.assertEqual(service["spec"]["externalTrafficPolicy"], "Cluster")
             self.assertEqual(service["spec"]["ports"][0]["nodePort"], node_port)
             self.assertNotIn("clusterIP", service["spec"])
-            self.assertNotIn("loadBalancerClass", service["spec"])
-            self.assertNotIn("allocateLoadBalancerNodePorts", service["spec"])
-            self.assertNotIn("loadBalancerSourceRanges", service["spec"])
-            self.assertNotIn("annotations", service["metadata"])
+            self.assertEqual(
+                service["spec"]["loadBalancerClass"], "daedalus.ai/nodeport-only"
+            )
+            self.assertTrue(service["spec"]["allocateLoadBalancerNodePorts"])
+            self.assertEqual(
+                service["spec"]["loadBalancerSourceRanges"],
+                ["192.168.1.0/24", "172.30.50.0/24", "10.0.0.0/16"],
+            )
+            self.assertEqual(
+                service["metadata"]["annotations"]["service.cilium.io/src-ranges-policy"],
+                "allow",
+            )
 
         policies = [r for r in resources if r["kind"] == "NetworkPolicy"]
         self.assertEqual(len(policies), 2)
@@ -243,7 +251,7 @@ class ChartRenderTests(unittest.TestCase):
             self.assertEqual(
                 policy["spec"]["ingress"],
                 [{
-                    "fromEntities": ["host", "remote-node"],
+                    "fromEntities": ["host", "remote-node", "world"],
                     "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
                 }],
             )
@@ -261,6 +269,9 @@ class ChartRenderTests(unittest.TestCase):
             if r and r["kind"] == "CiliumNetworkPolicy"
         ]
         self.assertEqual(len(policies), 1)
+        self.assertEqual(
+            policies[0]["spec"]["ingress"][0]["fromEntities"], ["host", "remote-node"]
+        )
         self.assertEqual(
             policies[0]["spec"]["endpointSelector"]["matchLabels"][
                 "app.kubernetes.io/component"

@@ -14,7 +14,15 @@ embedder:
   nodeSelector:
     kubernetes.io/arch: amd64
   service:
-    type: NodePort
+    type: LoadBalancer
+    loadBalancerClass: daedalus.ai/nodeport-only
+    annotations:
+      service.cilium.io/src-ranges-policy: allow
+    # Filter the established LAN, VPN and cluster sources before NodePort SNAT.
+    loadBalancerSourceRanges: &retrieverSourceRanges
+      - 192.168.1.0/24
+      - 172.30.50.0/24
+      - 10.0.0.0/16
     port: 8000
     externalTrafficPolicy: Cluster
     nodePort: 30085
@@ -31,7 +39,11 @@ reranker:
     kubernetes.io/arch: amd64
     nvidia.com/gpu.product: NVIDIA-L40S
   service:
-    type: NodePort
+    type: LoadBalancer
+    loadBalancerClass: daedalus.ai/nodeport-only
+    annotations:
+      service.cilium.io/src-ranges-policy: allow
+    loadBalancerSourceRanges: *retrieverSourceRanges
     port: 8000
     externalTrafficPolicy: Cluster
     nodePort: 30086
