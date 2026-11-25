@@ -34,8 +34,9 @@ profile. Initial startup can require model downloads. Set
 `huggingFace.existingSecret` when credentials are required; manage the token
 outside Helm.
 
-The reference reranker selects amd64 nodes labeled `nvidia.com/gpu.product:
-NVIDIA-L40S` and uses an explicit GPU-memory utilization of `0.65`. Check actual
+The reference profile pins both roles to `daedalus-02`, with one GPU per role.
+The reranker also requires the `nvidia.com/gpu.product: NVIDIA-L40S` label
+and uses an explicit GPU-memory utilization of `0.65`. Check actual
 free device memory before rollout; one allocatable GPU does not establish model
 startup capacity. This profile does not target smaller A30 devices or GB10
 shared host memory. Another GPU profile needs separate serving validation.

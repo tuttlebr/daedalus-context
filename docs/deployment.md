@@ -85,8 +85,8 @@ and other root settings in `.env`, and use chart overrides for placement,
 resources, pull secrets, and other component-specific settings. Hindsight uses
 its owning repository's configuration interface.
 
-The reference retriever overlay selects amd64 L40S nodes for the BF16 reranker;
-its base serving arguments set GPU-memory utilization explicitly. Verify free
+The reference retriever overlay places both roles on `daedalus-02`, using one
+L40S per role. The BF16 reranker sets GPU-memory utilization explicitly. Verify free
 device memory as well as node labels and device allocation before rollout.
 The capacity preflight counts devices for the embedder; it does not validate
 reranker model-memory fit. A healthy embedder does not establish reranker health.

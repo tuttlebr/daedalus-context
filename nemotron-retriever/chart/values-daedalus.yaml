@@ -13,6 +13,7 @@ embedder:
   # This vLLM profile needs discrete GPU memory; GB10 shares RAM with the host.
   nodeSelector:
     kubernetes.io/arch: amd64
+    kubernetes.io/hostname: daedalus-02
   service:
     type: LoadBalancer
     loadBalancerClass: daedalus.ai/nodeport-only
@@ -37,6 +38,7 @@ reranker:
   # alone does not distinguish smaller A30 devices or GB10 shared host memory.
   nodeSelector:
     kubernetes.io/arch: amd64
+    kubernetes.io/hostname: daedalus-02
     nvidia.com/gpu.product: NVIDIA-L40S
   service:
     type: LoadBalancer

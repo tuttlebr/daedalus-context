@@ -147,8 +147,12 @@ class ChartRenderTests(unittest.TestCase):
         deployments = [{r["metadata"]["labels"]["app.kubernetes.io/component"]:
                         r["spec"]["template"]["spec"] for r in resources
                         if r["kind"] == "Deployment"} for resources in rendered]
-        self.assertEqual(deployments[1]["reranker"].get("nodeSelector", {}), {
+        self.assertEqual(deployments[1]["embedder"]["nodeSelector"], {
+            "kubernetes.io/arch": "amd64", "kubernetes.io/hostname": "daedalus-02",
+        })
+        self.assertEqual(deployments[1]["reranker"]["nodeSelector"], {
             "kubernetes.io/arch": "amd64", "nvidia.com/gpu.product": "NVIDIA-L40S",
+            "kubernetes.io/hostname": "daedalus-02",
         })
         for role in ("reranker", "embedder"):
             servers = [next(c for c in pods[role]["containers"] if c["name"] == role)
