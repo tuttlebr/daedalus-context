@@ -5,7 +5,7 @@ replicaCount: 2
 image:
   repository: daedalus.ddns.me:5050/btuttle/pdf-server
   tag: 0.1.0
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 # imagePullSecrets lists existing registry credential Secrets.
 imagePullSecrets: []

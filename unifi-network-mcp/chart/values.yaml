@@ -4,7 +4,7 @@ replicaCount: 1
 image:
   repository: daedalus.ddns.me:5050/btuttle/unifi-network-mcp-server
   tag: 0.2.1
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 imagePullSecrets: []
 serviceAccount:
   create: true

@@ -94,6 +94,31 @@ class RootInterfaceTests(unittest.TestCase):
                 owned_charts.add(chart / "Chart.yaml")
         self.assertEqual(set(ROOT.glob("*/chart/Chart.yaml")), owned_charts)
 
+    def test_installed_workloads_always_pull_their_images(self) -> None:
+        for metadata in sorted(ROOT.glob("*/chart/Chart.yaml")):
+            chart = metadata.parent
+            with self.subTest(chart=chart.parent.name):
+                rendered = subprocess.check_output(
+                    ["helm", "template", chart.parent.name, str(chart), "--skip-tests"],
+                    text=True,
+                )
+                container_count = 0
+                for resource in yaml.safe_load_all(rendered):
+                    if not resource:
+                        continue
+                    spec = resource.get("spec", {})
+                    if resource["kind"] == "CronJob":
+                        spec = spec["jobTemplate"]["spec"]
+                    pod = spec if resource["kind"] == "Pod" else spec.get("template", {}).get("spec", {})
+                    for field in ("containers", "initContainers"):
+                        for container in pod.get(field) or []:
+                            container_count += 1
+                            self.assertEqual(
+                                container.get("imagePullPolicy"), "Always",
+                                f"{resource['kind']}/{resource['metadata']['name']} {container['name']}",
+                            )
+                self.assertGreater(container_count, 0)
+
     def test_compose_is_only_an_image_build_inventory(self) -> None:
         compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())
         self.assertEqual(set(compose), {"name", "services"})

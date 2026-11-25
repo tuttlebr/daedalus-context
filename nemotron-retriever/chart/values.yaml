@@ -9,7 +9,7 @@ image:
   repository: vllm/vllm-openai
   # The multimodal embedder requires vLLM 0.17.0 or newer.
   tag: v0.17.0
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 imagePullSecrets: []
 
@@ -47,7 +47,7 @@ nimCompatibility:
   image:
     repository: python
     tag: 3.12.11-alpine3.22
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   requestTimeoutSeconds: 300
   maxRequestBytes: "67108864"
   resources:
@@ -97,7 +97,7 @@ reranker:
   image:
     repository: vllm/vllm-openai
     tag: v0.32.0
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   # Keep existing clients that send the previous model ID working.
   servedModelAliases:
     - nvidia/llama-nemotron-rerank-1b-v2
@@ -180,7 +180,7 @@ embedder:
   image:
     repository: vllm/vllm-openai
     tag: v0.32.0
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   maxModelLen: 32768
   extraArgs:
     - --linear-backend=marlin
@@ -274,4 +274,4 @@ tests:
   image:
     repository: curlimages/curl
     tag: 8.15.0
-    pullPolicy: IfNotPresent
+    pullPolicy: Always

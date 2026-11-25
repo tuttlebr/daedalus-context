@@ -4,7 +4,7 @@ fullnameOverride: url-ingest
 images:
   crawler: daedalus.ddns.me:5050/btuttle/url-ingest:0.1.0
   runner: daedalus.ddns.me:5050/btuttle/url-ingest-runner:2.1.5
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 imagePullSecrets:
   - name: nvcr-imagepullsecret
 

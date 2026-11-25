@@ -186,8 +186,9 @@ registry access before deployment. Anonymous LAN registries remain supported.
 repositories and base SemVer tags, including explicit Make command-line
 overrides. It builds only selected components' owned contexts and publishes
 unique tags such as `1.2.3-deploy.<utc-time>.<nonce>`. Those exact references are
-printed and sent to reconciliation without rewriting `.env`. Tags change on
-each invocation, so a cached old image cannot prevent the new source rollout.
+printed and sent to reconciliation without rewriting `.env`. Each deployment
+gets new tags. Workloads installed by the Context charts default to
+`imagePullPolicy: Always`, so Kubernetes checks the registry each time a container starts.
 Source deployments use `IMAGE_PLATFORM=linux/amd64` for the reference cluster,
 including on ARM developer hosts. Override it only with reviewed Dockerfile,
 dependency and chart placement support for the selected components. This is a

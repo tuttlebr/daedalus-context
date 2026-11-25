@@ -4,7 +4,7 @@ milvus:
     all:
       repository: milvusdb/milvus
       tag: v2.6.11
-      pullPolicy: IfNotPresent
+      pullPolicy: Always
 
   milvusAuthEnv: &milvusAuthEnv
     - name: COMMON_SECURITY_AUTHORIZATIONENABLED
@@ -43,6 +43,8 @@ milvus:
     enabled: false
   woodpecker:
     enabled: true
+    image:
+      pullPolicy: Always
   serviceAccount:
     create: true
     name: milvus
@@ -162,7 +164,7 @@ milvus:
       # Upstream historical tags are unavailable; the digest preserves binary identity.
       repository: daedalus.ddns.me:5050/btuttle/minio
       tag: RELEASE.2024-12-18T13-15-44Z-amd64@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20
-      pullPolicy: IfNotPresent
+      pullPolicy: Always
     # The server image also ships /usr/bin/mc. Reuse its pinned mirror for the
     # bucket hook; the dependency's historical minio/mc image is unavailable.
     mcImage: *minioImage
@@ -205,6 +207,8 @@ milvus:
       limits: {cpu: "2", memory: 4Gi}
 
   etcd:
+    image:
+      pullPolicy: Always
     podAntiAffinityPreset: hard
     pdb:
       create: true
